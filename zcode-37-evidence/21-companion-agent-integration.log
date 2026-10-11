@@ -1,0 +1,12 @@
+cd packages/agent && uv sync --locked
+Resolved 83 packages in 6ms
+Checked 79 packages in 11ms
+cd packages/agent && uv run ruff format --check tests/integration && uv run ruff check tests/integration
+1 file already formatted
+All checks passed!
+cd packages/agent && uv run mypy
+Success: no issues found in 53 source files
+MORNLEA_AGENT_PYTHON=/Users/chen/work/mornlea-f2-37-zcode/packages/agent/.venv/bin/python MORNLEA_COMPANION_AGENT_PYTHON=/Users/chen/work/mornlea-f2-37-zcode/packages/agent/.venv/bin/python go test ./packages/shared/companion ./packages/server/server \
+		-run 'CompanionAgent.*Integration|CrossLanguage|MCP.*Integration' -race -count=1 -timeout=120s
+ok  	github.com/channing771/mornlea/packages/shared/companion	2.363s [no tests to run]
+ok  	github.com/channing771/mornlea/packages/server/server	16.752s

@@ -1,0 +1,49 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/local_remote_parity.rs (packages/engine/target/cargo/debug/deps/local_remote_parity-57f89c0584f7e961)
+
+running 42 tests
+test common::sixteenth_seventeenth_reservation ... ok
+test common::terminal_retention_uses_closure_order_once ... ok
+test common::unauthenticated_play_wrong_phase ... ok
+test common::closed_connection_releases_inbound ... ok
+test common::login_success_send_ack_before_play ... ok
+test common::cancel_before_vs_after_handoff ... ok
+test common::wrong_version_truncated_expired_refused ... ok
+test common::valid_handshake_round_trip ... ok
+test common::terminal_connection_churn_is_bounded ... ok
+test common::coalesced_then_ingest_cap ... ok
+test integration::tcp_disconnect_during_pending_save_keeps_save_in_flight ... ok
+test integration::shared_transcript_matches_across_adapters ... ok
+test live::actual_receive_advances_unread_tcp_hello ... ok
+test live::held_actual_player_read_returns_login_pump_before_release ... ok
+test live::held_actual_player_read_advances_unread_tcp_login_before_return ... ok
+test memory::local_direct_mutation_impossible ... ok
+test memory::login_play_close_round_trip ... ok
+test live::held_actual_player_read_returns_tcp_login_pump_before_release ... ok
+test memory::stale_session_refused ... ok
+test memory::outbox_pressure_512_513 ... ok
+test live::actual_handoff_timeout_cancels_before_activation_across_transports ... ok
+test live::scheduler_delegates_chunk_loads_to_same_actual_owner ... ok
+test prepared_delivery::actual_background_store_tcp_and_memory_canonical_fifo_and_budgets ... ok
+test live::actual_saved_and_missing_players_share_memory_tcp_login_tick_and_bytes ... ok
+test prepared_delivery::actual_closed_admission_does_not_transfer_an_owner ... ok
+test tcp::forwarding_wrong_connection_preserves_authority_outbox ... ok
+test tcp::fragmented_frame_reassembled ... ok
+test tcp::hello_login_timeouts ... ok
+test tcp::mixed_publication_has_identical_owned_memory_and_tcp_frames ... ok
+test tcp::forwarding_into_held_socket_queue_keeps_authority_suffix ... ok
+test tcp::peer_reset_recovers ... ok
+test tcp::slow_receiver_isolated ... ok
+test tcp::terminal_eof_releases_socket ... ok
+test tcp::terminal_poll_expiry_releases_socket ... ok
+test tcp::terminal_rejection_flushes_then_releases_socket ... ok
+test tcp::absent_delivery_expires_without_advancing_protocol_clock ... ok
+test tcp::transcript_matches_memory ... ok
+test prepared_delivery::actual_receive_advances_ready_login_before_core_handoff ... ok
+test prepared_delivery::actual_identity_refusals_preserve_other_active_fifo_before_and_after_login_close ... ok
+test live::actual_corrupt_and_future_players_reject_across_memory_and_tcp ... ok
+test live::actual_reconnects_release_committed_driver_history_across_transports ... ok
+test live::background_owner_failures_keep_exact_error_and_wire_class ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+

@@ -1,0 +1,10 @@
+$ go test ./packages/server/server -race -count=1 -v -run '^(TestSessionRegistrySnapshotsDeltasAndForgetStayWithTarget|TestPlayerStatePublicationOrder)$'
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:38Z
+=== RUN   TestPlayerStatePublicationOrder
+--- PASS: TestPlayerStatePublicationOrder (0.04s)
+=== RUN   TestSessionRegistrySnapshotsDeltasAndForgetStayWithTarget
+--- PASS: TestSessionRegistrySnapshotsDeltasAndForgetStayWithTarget (0.10s)
+PASS
+ok  	github.com/channing771/mornlea/packages/server/server	1.163s
+# exit: 0

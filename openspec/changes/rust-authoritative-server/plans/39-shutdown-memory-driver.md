@@ -1,0 +1,22 @@
+# Retryable shutdown memory driver
+
+Controller serially owns src/core/shutdown.rs, src/core/state.rs and tests/server_contract/shutdown.rs beneath packages/engine/crates/mornlea_server. Shared contract44800afb is accepted; packet38 MemoryOwner provider is independently isolated and must land before actual provider acceptance. Repository-wide consumer enumeration reaches AuthorityState.drive_shutdown/ShutdownIo as well as core::shutdown::shutdown/ShutdownPorts; both delegate the same crate-private finalize_memory(memory,clock,deadline,report) helper owned by shutdown.rs. The contract-double test clock may be reconciled only if its artificial one-nanosecond remaining budget masks the now-real wall bound. Existing wire/store/worker/final-reducer ports and all other source remain read-only. Controller owns shared integration, status/records, exact owned-file rollback and parent3.9d6 acceptance.
+
+## Frozen driver algorithm
+
+1. FinalizeMemory records memory.pending().outstanding before begin_attempt, after any begin/drain refusal, and whenever a phase deadline expires. Never lose retained ownership because drain returns Err. Existing completed phases/final_tick/frozen lease stay unchanged and later flush/release/close phases cannot run until memory reaches zero.
+2. Begin once per invocation of the memory phase; retries reopen a new context through the same retained provider. Establish a real-wall budget equal to min(caller remaining injected duration,30s) at phase entry. Drive drain repeatedly while both injected caller deadline and wall deadline remain. Successful nonzero reports are progress, not Internal failure. Read the required pending snapshot again after drain; use the maximum of reported outstanding and retained pending ownership so an erroneous zero report cannot close live resources.
+3. Between nonzero drains sleep at most1ms, limited to remaining wall budget. No fixed iteration count, unbounded busy loop or >60s blocking wait. On expiry return Timeout(Shutdown), record current retained pending and preserve retryability. On drain error record pending before propagating typed error. Do not rerun completed final tick, worker quiescence, store sync, lease release or close.
+4. Outside the phase, when the outer deadline guard refuses entry to FinalizeMemory, still record its current pending. All other phase order/error classifications remain unchanged. Admission stays stopped/Frozen throughout retries.
+
+## Test-first and integration
+
+- Extend the existing memory double with explicit pending count, finite pending-drain sequence and fail-once begin/drain switches; defaults preserve existing tests. Repeated pending reports eventually settle in one phase attempt, then flush/release/close in existing order. Old driver stops after one and fails Internal.
+- Begin/drain Timeout at outstanding3 records three, releases/closes nothing, retains phase/final_tick/lease. Retry drains without second final tick and closes successfully. Old driver loses outstanding count on Err.
+- A fixed injected clock and20ms caller remaining budget with indefinitely Pending work fails Timeout by real wall (<250ms), reports outstanding, no release/flush; later retry succeeds with same final tick. Immediate zero still needs one drain for terminal settlement.
+- An incorrect zero progress report cannot hide the required pending snapshot. A drain that completes after the phase wall/caller deadline keeps release/flush deferred until a fresh attempt; deadline is checked after drain before accepting zero.
+- After MemoryOwner provider integration, drive actual MemoryOwner plus the same actual LeaseController clone through shutdown: a parked/unknown commit times out with semantic identity and joins retained, a fresh retry reconciles and commits or fulfills exact prior operation before release/close; final tick once and actual lease/wire closed only after zero. Use existing scripted AgentWire for deterministic ownership plus actual Python service evidence at its integration boundary; provider/double evidence alone cannot close production startup.
+
+## Gates
+
+Source /workspace/.mornlea-env/env.sh; focused shutdown suite with behavioral RED/GREEN, lease/memory/parity consumers, all-target clippy -D warnings, owned fmt/diff. Commit focused driver before serial actual-provider integration. Independent review confirms retry ownership and real wall bounds. No hashed Go input, generated artifact, wire/save schema or default startup changes. Architecture skill: no change.

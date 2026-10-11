@@ -1,0 +1,14 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --test server_replay -- --exact publication_projection::projection_companion_lifecycle_spawn_states_despawn publication_projection::projection_actor_reset_companion_captured_once publication_projection::projection_batch_splitting_respects_wire_caps
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:31Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/server_replay.rs (/workspace/ethan/target/debug/deps/server_replay-f1ad081c4434cf89)
+
+running 3 tests
+test publication_projection::projection_batch_splitting_respects_wire_caps ... ok
+test publication_projection::projection_actor_reset_companion_captured_once ... ok
+test publication_projection::projection_companion_lifecycle_spawn_states_despawn ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 682 filtered out; finished in 0.01s
+
+# exit: 0

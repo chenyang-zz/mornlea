@@ -1,0 +1,32 @@
+$ go test ./packages/server/server -race -count=1 -v -run '^(TestRemotePlayerInterestMatrix|TestRemotePlayerOutsideInterestJoinAndLeaveAreSilent|TestRemotePlayerNegativeFootChunkUsesFloor|TestRemotePlayerPublicationOrder|TestRemotePlayerGenerationReplacementDespawnsBeforeSpawn)$'
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:40Z
+=== RUN   TestRemotePlayerInterestMatrix
+=== RUN   TestRemotePlayerInterestMatrix/双方_ready_且_snapshot_已发送
+=== RUN   TestRemotePlayerInterestMatrix/观察者未_ready
+=== RUN   TestRemotePlayerInterestMatrix/目标未_ready
+=== RUN   TestRemotePlayerInterestMatrix/异维度
+=== RUN   TestRemotePlayerInterestMatrix/目标脚底_chunk_不_wanted
+=== RUN   TestRemotePlayerInterestMatrix/wanted_chunk_尚未发送_snapshot
+=== RUN   TestRemotePlayerInterestMatrix/目标_session_元数据已移除
+=== RUN   TestRemotePlayerInterestMatrix/自己永不进入远端_roster
+--- PASS: TestRemotePlayerInterestMatrix (0.01s)
+    --- PASS: TestRemotePlayerInterestMatrix/双方_ready_且_snapshot_已发送 (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/观察者未_ready (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/目标未_ready (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/异维度 (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/目标脚底_chunk_不_wanted (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/wanted_chunk_尚未发送_snapshot (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/目标_session_元数据已移除 (0.00s)
+    --- PASS: TestRemotePlayerInterestMatrix/自己永不进入远端_roster (0.00s)
+=== RUN   TestRemotePlayerOutsideInterestJoinAndLeaveAreSilent
+--- PASS: TestRemotePlayerOutsideInterestJoinAndLeaveAreSilent (0.00s)
+=== RUN   TestRemotePlayerNegativeFootChunkUsesFloor
+--- PASS: TestRemotePlayerNegativeFootChunkUsesFloor (0.00s)
+=== RUN   TestRemotePlayerPublicationOrder
+--- PASS: TestRemotePlayerPublicationOrder (0.00s)
+=== RUN   TestRemotePlayerGenerationReplacementDespawnsBeforeSpawn
+--- PASS: TestRemotePlayerGenerationReplacementDespawnsBeforeSpawn (0.00s)
+PASS
+ok  	github.com/channing771/mornlea/packages/server/server	1.033s
+# exit: 0

@@ -1,0 +1,15 @@
+# Actual panicked-worker consumer retirement
+
+Shared repairdb6b3831 accepts local absent-ID retirement as idempotent while preserving first panic Internal and live join Timeout. Provider3819931b accepts packet38's progress algorithm after independent review identifies the inherited ghost cleanup defect. Parent3.9d6 remains open. Controller owns exact acceptance, serial integration and status. Two independent test nodes consume this accepted shared boundary; they do not design another lifecycle policy.
+
+## Host node
+
+One isolated Sol implementer owns only tests/server_contract/agent_host.rs beneath packages/engine/crates/mornlea_server. All production, other tests/Go/OpenSpec stay read-only. Existing test helper factories/real SnapshotRegistry and actual LeaseController over an AgentWire that echoes Acquire but panics for Plan provide exact producer ownership. Admit a plan with the actual lease/fence, wait for actual worker terminal and drain host failure/snapshot exactly once. First cancel removes/join-reports panic; a later host drain/admission reaps the now-absent request with accepted idempotent cancel. Prove more than64 repeated plan panic cycles succeed with original snapshot/failure settled once and actual retained HTTP slots0 each time, so a ghost cleanup cannot exhaust capacity. Use unique canonical request/run IDs and consume every host failure; no manually cleared private ledger or fake retirement answer. Preserve host slot/outcome fencing and ordinary HTTP65 test.
+
+Write the regression first. Controller may prepare an isolated baseline with the pre-repair actual lease provider for behavioral RED; worker must not mutate read-only production in its accepted worktree. Scoped test(server): prove host cleanup after panicked Agent workers after focused host suite (nonzero), owned fmt, all-target clippy -D warnings, diff check and exact diff/evidence. Main reviews/integrates and owns exact one-file rollback; no task status edits.
+
+## Memory node
+
+Controller serially owns only tests/server_contract/agent_memory.rs for this closely coupled finalization proof. Actual Frozen LeaseController clone over the existing echo memory wire with a one-shot Commit panic: admit original reservation/commit, poll actual Internal and retire join. Reservation plus temporarily refused cleanup is visible; subsequent finalization reaps absent original request, reconciles the unchanged remote base and commits identical operation. Loop actual drain under1s caller budget until pending0, original mirror revision/base+1 and operation, controller retained0; close actual shared controller. No injected fake terminal/cleanup or public diagnostic query added. Isolated old-provider baseline must show final semantic settlement can still leave ghost cleanup pending/deadline Timeout.
+
+Focused memory/lease/host consumers plus actual Python shutdown test follow. These tests prove join ownership/composition, not production FinalReducer/storage/gameplay. No schema/Go/oracle/generated input change. Architecture skill: no change.

@@ -1,0 +1,28 @@
+$ cd packages/engine && MORNLEA_AGENT_PYTHON=<repo>/packages/agent/.venv/bin/python PYTHONPATH=<repo>/packages/agent/app/src:<repo>/packages/agent/harness/src:<repo>/packages/agent/extension-api/src cargo test -p mornlea_server --locked --test agent_process && MORNLEA_AGENT_PYTHON=<repo>/packages/agent/.venv/bin/python PYTHONPATH=<repo>/packages/agent/app/src:<repo>/packages/agent/harness/src:<repo>/packages/agent/extension-api/src cargo test -p mornlea_server --locked --test server_replay -- full_corpus::
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:06:20Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/agent_process.rs (/workspace/ethan/target/debug/deps/agent_process-fb61d80d9f02cb71)
+
+running 7 tests
+test finalization::held_reconcile_obligation_counts_preserve_owned_work ... ok
+test integration::block_cancel_deadline_and_shutdown ... ok
+test integration::real_memory_commit_reconcile ... ok
+test finalization::real_memory_shutdown_retry_confirms_lost_commit_before_release ... ok
+test integration::memory_authority::real_python_commit_and_fresh_final_drain_accept_complete_authority_before_confirmation ... ok
+test integration::release_failure_retains_same_lease ... ok
+test integration::rust_plan_python_mcp_and_authority ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/server_replay.rs (/workspace/ethan/target/debug/deps/server_replay-f1ad081c4434cf89)
+
+running 3 tests
+test full_corpus::logical_state_and_events_match_across_runs ... ok
+test full_corpus::inventory_source_digests_match_go_fixtures ... ok
+test full_corpus::real_agent_candidate_admitted_and_stale_refused ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 682 filtered out; finished in 2.46s
+
+# exit: 0

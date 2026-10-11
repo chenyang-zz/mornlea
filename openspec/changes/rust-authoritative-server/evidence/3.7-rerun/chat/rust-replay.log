@@ -1,0 +1,17 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --test server_replay -- --exact publication_projection::projection_chat_accepted_broadcast_and_rejects_sender_only publication_projection::projection_chat_contract_inactive_admission_and_unknown publication_projection::projection_chat_contract_install_stop_runtime_fence publication_projection::projection_chat_contract_stop_rejections_and_take_once publication_projection::projection_chat_contract_fifo_capacity_two_slots
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:07Z
+   Compiling mornlea_server v0.1.0 (/workspace/ethan/mornlea/packages/engine/crates/mornlea_server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.15s
+     Running tests/server_replay.rs (/workspace/ethan/target/debug/deps/server_replay-f1ad081c4434cf89)
+
+running 5 tests
+test publication_projection::projection_chat_accepted_broadcast_and_rejects_sender_only ... ok
+test publication_projection::projection_chat_contract_inactive_admission_and_unknown ... ok
+test publication_projection::projection_chat_contract_stop_rejections_and_take_once ... ok
+test publication_projection::projection_chat_contract_fifo_capacity_two_slots ... ok
+test publication_projection::projection_chat_contract_install_stop_runtime_fence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 680 filtered out; finished in 0.01s
+
+# exit: 0

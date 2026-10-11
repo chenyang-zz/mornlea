@@ -5,7 +5,7 @@ This is an index over the linked OpenSpec `tasks.md` files, not a second status 
 | Stage and status source | Open nodes | Detailed packet entry |
 | --- | ---: | --- |
 | [F1 numerical closure](../../archive/2026-09-27-rust-native-numerical-closure/tasks.md) | 0 (29 complete) | [Foundation packets](../../archive/2026-09-27-rust-native-numerical-closure/plans/00-foundation.md) and its linked provider/adapter/closure packets |
-| [F1 final foundation acceptance](../../rust-runtime-foundation-acceptance/tasks.md) | 0 (5 complete) | [Observed rejection and mandatory acceptance](../../rust-runtime-foundation-acceptance/plans/00-acceptance.md) |
+| [F1 final foundation acceptance](../../archive/2026-10-08-rust-runtime-foundation-acceptance/tasks.md) | 0 (5 complete) | [Observed rejection and mandatory acceptance](../../archive/2026-10-08-rust-runtime-foundation-acceptance/plans/00-acceptance.md) |
 | [F2 authoritative server](../../rust-authoritative-server/tasks.md) | 51 | [S1 contract](../../rust-authoritative-server/plans/00-execution.md), [core seams](../../rust-authoritative-server/plans/02-core-seams.md), [server slices](../../rust-authoritative-server/plans/01-server-slices.md) |
 | [F3 client core and bridge](../../rust-client-core/tasks.md) | 41 | [C1/C2/G1 contract](../../rust-client-core/plans/00-client-contract.md), [family schema](../../rust-client-core/plans/02-family-schemas.md), [client slices](../../rust-client-core/plans/01-client-slices.md) |
 | [P8 terrain](../../godot-production-terrain/tasks.md) | 12 | [Terrain packets](../../godot-production-terrain/plans/worker-packets.md) |
@@ -16,7 +16,7 @@ This is an index over the linked OpenSpec `tasks.md` files, not a second status 
 | [P13 packaging](../../godot-desktop-packaging/tasks.md) | 23 | [Release packets](../../godot-desktop-packaging/plans/worker-packets.md), [local supervision](../../godot-desktop-packaging/plans/02-local-supervision.md), [platform preparation](../../godot-desktop-packaging/plans/03-platform-preparation.md) |
 | [P14 cutover](../tasks.md) | 18 | [Cutover packets](worker-packets.md), [cycle schema](02-cycle-schema.md) |
 
-The nine downstream changes contain **208 pending nodes**. The archived numerical change has 29 accepted nodes and final F1 has five completed nodes. The [F1 seal](../../rust-runtime-foundation-acceptance/acceptance.json) binds source `d042982d33bb1694d768b75b01c297bd02534a08` and canonical corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`: 112 supported points,1434 cases,zero gaps. Accepted implementation and gate evidence live in the linked ledgers.
+The nine downstream changes contain **208 pending nodes**. The archived numerical change has 29 accepted nodes and final F1 has five completed nodes. The [F1 seal](../../archive/2026-10-08-rust-runtime-foundation-acceptance/acceptance.json) binds source `d042982d33bb1694d768b75b01c297bd02534a08` and canonical corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`: 112 supported points,1434 cases,zero gaps. Accepted implementation and gate evidence live in the linked ledgers.
 
 | Wave | Serial landing / accepted gate | Concurrent disjoint lanes after the gate | Serial join / acceptance |
 | --- | --- | --- | --- |

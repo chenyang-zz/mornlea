@@ -1,0 +1,12 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --test local_remote_parity -- --exact integration::remote_player_lifecycle_publications_match_across_adapters
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:45Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/local_remote_parity.rs (/workspace/ethan/target/debug/deps/local_remote_parity-cca307bf5cd04f05)
+
+running 1 test
+test integration::remote_player_lifecycle_publications_match_across_adapters ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.02s
+
+# exit: 0

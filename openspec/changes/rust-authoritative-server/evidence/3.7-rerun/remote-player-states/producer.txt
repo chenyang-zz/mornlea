@@ -1,0 +1,6 @@
+$ git grep -n -E 'RemotePlayerStates::try_new|Event::RemotePlayerStates\(' -- packages/engine/crates/mornlea_server/src/core/publication_project.rs packages/engine/crates/mornlea_server/src/core/step.rs
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:45Z
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1335:            if let Ok(batch) = RemotePlayerStates::try_new(RemotePlayerStatesParts {
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:1341:                    Event::RemotePlayerStates(batch),
+# exit: 0

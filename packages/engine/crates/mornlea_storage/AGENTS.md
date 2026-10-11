@@ -53,6 +53,23 @@ the next section.
 
 ## `save.companion` output boundary (`src/companion.rs`)
 
+- Private `src/companion_merge.rs` owns the pure `merge_companions_v5`
+  configuration contract. Borrowed missing/legacy/v5 input is completely
+  validated before bounded copies; stored bodies win over configured provisional
+  bodies. Namespace entropy precedes canonical per-ID mirror/tombstone entropy,
+  and failure exposes no partial save. `CompanionMergeError<E>` separates codec
+  admission from the caller's original entropy cause, including I/O errors.
+  Unchanged v5 input requires neither
+  entropy nor a new aggregate revision. Activity transitions increment memory
+  epoch and clear old mirror/task ownership, while durable aggregate revision
+  remains separate from memory revision. The caller owns entropy and startup
+  durability; this crate creates no runtime actor or Agent request.
+- The merge topic compares nineteen named outcomes against actual unchanged Go
+  merge/encode bytes in its separately generated text fixture. Literal checks
+  cover memory migration, transition cleanup, ownership and malformed admission.
+  Existing sealed codec corpus remains the codec authority. Merge conformance
+  does not accept authoritative task/body capture or final memory composition.
+
 - `companions_encoded_len` reports the exact v5 envelope length after the same
   admission checks as `encode_companions`, without building encoded bytes.
 - `encode_companions_into` writes that exact length into a caller buffer and

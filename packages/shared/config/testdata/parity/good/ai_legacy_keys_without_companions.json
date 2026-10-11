@@ -1,0 +1,7 @@
+{
+  "ai": {
+    "endpoint": "http://example.com",
+    "model": "m",
+    "apiKeyEnv": "X"
+  }
+}

@@ -1,0 +1,14 @@
+$ go test ./packages/server/server -race -count=1 -v -run '^(TestCompanionPublicationWaitsForFootChunkSnapshot|TestCompanionPublicationStatesAreSortedAndNewSpawnsSkipCurrentTick|TestEightPlayersAndFourCompanionsUseIndependentServerCapacity|TestCompanionPublicationRejectsUnknownDefinitionWithoutPartialVisibility)$'
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:32Z
+=== RUN   TestCompanionPublicationWaitsForFootChunkSnapshot
+--- PASS: TestCompanionPublicationWaitsForFootChunkSnapshot (0.00s)
+=== RUN   TestCompanionPublicationStatesAreSortedAndNewSpawnsSkipCurrentTick
+--- PASS: TestCompanionPublicationStatesAreSortedAndNewSpawnsSkipCurrentTick (0.00s)
+=== RUN   TestEightPlayersAndFourCompanionsUseIndependentServerCapacity
+--- PASS: TestEightPlayersAndFourCompanionsUseIndependentServerCapacity (0.61s)
+=== RUN   TestCompanionPublicationRejectsUnknownDefinitionWithoutPartialVisibility
+--- PASS: TestCompanionPublicationRejectsUnknownDefinitionWithoutPartialVisibility (0.00s)
+PASS
+ok  	github.com/channing771/mornlea/packages/server/server	1.633s
+# exit: 0

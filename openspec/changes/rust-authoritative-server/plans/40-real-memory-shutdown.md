@@ -1,0 +1,17 @@
+# Actual Python memory shutdown retry
+
+Controller serially owns tests/agent_process.rs, tests/agent_process/integration.rs (only shared helper serialization visibility), and new tests/agent_process/finalization.rs beneath packages/engine/crates/mornlea_server. Accepted driver6d305175 and shared contract44800afb; MemoryOwner provider packet38 must be accepted before final GREEN. No Agent Python/Go/helper/wire production source changes or schema edits. Controller owns exact rollback, actual-provider acceptance and parent3.9d6 status; production game executable remains separate.
+
+## Frozen test topology and faults
+
+Reuse existing actual Python gateway process/SQLite memory store and real AgentHttpWire. Actual LeaseController is the sole lease owner; MemoryOwner gets one Clone and ShutdownPorts.agent the other. Serialize helper process with existing integration mutex. A test-only AgentWire fault wrapper delegates every actual HTTP request: lose exactly one commit response AFTER real HTTP succeeds, retain original reservation, and gate the first finalization reconcile cooperatively on an AtomicBool while honoring RpcCancellation/deadline. This is explicit response-loss/pending fault injection around a real HTTP provider, not a fake memory answer. Count actual commit, confirmed reconcile, release and wire-close events.
+
+Seed active epoch1/base0, reserve original operation/summary and submit commit. Actual remote store commits revision1; wrapper reports typed AgentRpc timeout; terminal poll retires original HTTP join but leaves reservation. First actual shutdown attempt with fixed clock and40ms caller budget runs one final reducer callback, freezes same controller, reaches FinalizeMemory and submits a gated reconcile; deadline reports outstanding1, no persistence/lease release/wire close. Assert gate actually reached, retained same operation/phase/lease and zero flush events.
+
+Open gate, retry with fresh caller budget5s. begin cancels/reaps old request; fresh finalizer reconcile gets actual remote epoch1/revision1/operation/summary and fulfills the reservation without another commit. Memory reports zero including cleanup; only then ordered flush/sync, actual lease Release and actual AgentHttpWire.close occur. Assert original commit count1, exact owner mirror/operation/revision, retained HTTP joins0, same controller Closed, final reducer callback once and idempotent second shutdown with no further events.
+
+Non-memory lifecycle ports are explicit test doubles and unused methods refuse; the final reducer callback only counts one admitted final-tick callback, not a gameplay oracle. Their events expose ordering, not disk durability. This test qualifies real memory/lease/wire plus shutdown retries; it cannot qualify production FinalReducer, disk ports, gameplay input, MCP startup or Rust executable activation. No network memory state is invented.
+
+## Gates
+
+Write test before provider cherry-pick; record actual old MemoryOwner behavioral RED independently of helper/setup failures. Source env with MORNLEA_AGENT_PYTHON explicit actual venv fixture. Focused real_memory_shutdown_retry and whole actual Agent test binary (nonzero), related memory/shutdown contracts, all-target clippy -D warnings, owned fmt/diff. External owned child supervisor is optional for ordinary Python child ownership; tests already own/reap their helper. Review source and actual event evidence before marking3.9d6. Whole server/stage gates follow integration; 3.7/3.8/4.2 remain open. Architecture skill: no change.

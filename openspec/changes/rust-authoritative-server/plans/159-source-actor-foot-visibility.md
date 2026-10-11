@@ -1,0 +1,51 @@
+# Source actor foot visibility implementation plan
+
+For agentic workers: use superpowers:executing-plans with the user's direct Codex/full/noLoom selection. Root alone writes, integrates and owns inverse rollback; isolated reviewers and evidence delegates are read-only. Status lives only in tasks.md.
+
+Goal: gate Active observers' actor publications on their wanted foot snapshots and preserve early departure/snapshot/late arrival order.
+
+Architecture: one private borrowed visibility input and one per-session foot predicate reuse admitted chunk books plus same-pass selected snapshots. Early remote/companion cuts use admitted books only. Late cuts use selected lookahead without claiming admission; planned early departures exclude survivors and force same-pass respawn.
+
+Tech stack: existing Rust authority/domain/protocol plus unchanged Go publication consumers.
+
+Spec: ../design.md and specs/rust-authoritative-server/spec.md parity, bounds and provider distinction. Node3.7l3afv READY on accepted158 45e7bb2da6e724daddc84619a5797a4113bc0935. One private independently rejectable node; no shared parallel landing needed.
+
+## Ownership and exclusions
+
+Exact source3: packages/engine/crates/mornlea_server/AGENTS.md, src/core/state.rs, src/core/publication_project.rs. Exact docs4: design.md, ledger.md, tasks.md and this packet. Existing replay tests remain read-only: census found seventeen actor consumers with prepared Ready plus actual snapshot/FIFO qualification, no invalid oracle. Other read-only consumers include local_remote_parity/integration.rs full wire order and persistence_failure/source_mob_persistence.rs. Preserve C before remote and projectile before passive. No new directory; existing server guide governs private tests. Versions, public APIs, manifests, numerical providers, acquisition/restore, session_view and queued metadata, Go, architecture skills are read-only. Protect dev9/archive2/Go50+25; reuse checkout, no clone/worktree/Loom/Claude/push/deploy/foreground game. Root owns Cargo/identity refresh and final gates. English task-ID-free comments. AOCI unavailable, no fabricated cognition.
+
+Active observers only in this node: Pending companion/hostile/passive/projectile observer parity needs a separate registered per-session subscription owner. Preserve drop radius-two physical Ready policy without snapshot gating. Do not infer current Ready from lifecycle, or require global Ready for an already-admitted foot. Native recovery/activation and configured runtime/off-tick packing/cross-peer retirement remain separate. Prepared motion, Ready and immutable-limit controls qualify actual publication consumers, not ordinary movement/bootstrap/full TCP parity.
+
+## Private contracts and algorithm
+
+Add VisibilityInputs<'a> borrowing actors:&[ActorRecord], entities:&Entities, speakers:&[Speaker], projectiles:&[ProjectileRecord], drops:&[ItemDrop]. Replace private visibility_of with fn visibility_of(observer:&Observer,view:&SessionView,inputs:&VisibilityInputs<'_>,snapshots:Option<&BTreeSet<(SessionKey,ChunkKey)>>)->Visibility. Add fn actor_foot_visible(observer:&Observer,view:&SessionView,dimension:Dimension,position:[f32;3],snapshots:Option<&BTreeSet<(SessionKey,ChunkKey)>>)->bool. It computes existing position_chunk and requires observer.wanted.contains(key) AND (view.chunks[key].snapshot_sent OR snapshots contains (observer.session,key)). Never query global Ready. Preserve current Active checks and entity/dimension classification. All five actor families consume this predicate; drops retain existing physical square.
+
+Capture early visibilities by observers.zip(view_list), snapshots=None; emit_despawns consumes them unchanged. Existing Forget, whole-delta classification, bounded snapshot selection and block batches retain order. Recompute late visibilities with snapshots=Some(&selected), then emit families in existing C/R/H/projectile/passive/drop order.
+
+Add early_visibilities:&[Visibility] to private emit_companions and emit_remotes. Iterate matching early/late per observer. Companion arrival if late contains id AND (old book lacks id OR early lacks id); survivor states require late AND old AND early. Remote arrival skipped only when old book and early map both match exact PlayerId/SessionKey; survivor states require both maps match late incarnation. This private planned-departure lookahead avoids eager mirror mutation: despawn queued before snapshot must be followed by spawn rather than state. Other families already compute their departure after selected snapshots and preserve unchanged admitted-book comparisons.
+
+Bounded work remains existing captured entity limits (8players/4C/64H/32P/128projectiles), checked interest square and selected snapshot cap64. Two bounded visibility passes add no retained owners or unbounded work. Per-session lookahead cannot borrow another recipient's selection. Full preflight occurs before any append. Saturation sets outbox_closed immediately; therefore an admitted later actor frame implies its earlier selected foot snapshot was admitted. Existing Closed, saturated retirement, marker-before-snapshot and failure/ACK policies remain unchanged.
+
+## Tests first and review focus
+
+In existing state.rs owner_record_admission_tests add actor_foot_ tests using accepted remote_fixture and C/H/P/projectile fixtures. Prepared motion stages checked Actor/Projectile effects into foot(1,0), actual Ready preload, existing selection_limits off tick. Each new selected-foot test projects and publishes the COMPLETE vector, compares exact encoded recipient FIFO and actual books, never family-filtered projector or seeded mirror. Helpers classify actor packet families for assertions only; no events are discarded before publication.
+
+Five named tests actor_foot_remote_waits_for_snapshot, companion_waits_for_snapshot, hostile_waits_for_snapshot, passive_waits_for_snapshot, projectile_waits_for_snapshot: foot1 Ready but unsent, count0 -> no target-family packets. Publish full vector, membership empty. Raise count1 -> foot snapshot precedes exactly one family spawn and no family state; all books remain empty/unsent before publish. Late unknown recipient fails entire preflight, FIFO empty/book unchanged/reprojection identical. Close owner FIFO: healthy recipient admits snapshot before spawn, closed owner retains unsent/empty and retry produces same sequence. Baseline five fail forbidden arrivals before snapshot.
+
+actor_foot_remote_reappears_after_snapshot and companion_reappears_after_snapshot: actual full initial publication admits target at0; prepared target moves1, count1. Exactly family despawn -> snapshot1 -> spawn, no family survivor state; old membership retained before queue and restored after whole FIFO. Reprojection compares exact observing-owner frames: the moving remote peer may consume its own first-pass Forget through existing desired-interest cleanup, so whole cross-peer vector identity is not required. Next full projection has survivor state only. Baseline two fail missing early departure/rearrival.
+
+actor_foot_remote_departure_waits_for_later_snapshot and companion_departure_waits_for_later_snapshot: same initial admitted target, move1 count0 -> despawn only, publish removes exact membership; count1 later -> snapshot then spawn, next states. Baseline two emit state instead of departure.
+
+actor_foot_saturated_departure_prefix_peer: C initial at0 actual whole FIFO, move1, count1; lower legal outbox cap16 off tick and append fifteen existing marker frames to owner only. Full projection has departure -> snapshot -> spawn for each observer. Owner admits only departure after markers, snapshot/arrival dropped and retirement removes view; exact retained FIFO sixteen frames. Healthy peer admits full sequence and retains companion, next state. Baseline fails causal early ordering. No cross-peer liveness redesign.
+
+actor_foot_admitted_does_not_require_global_ready: actual snapshot/remote admission0, remove prepared Ready owner off tick without native recovery, count0; Active prepared targets still emit admitted survivor states. Control passes baseline; do not infer native recovery parity.
+
+actor_foot_drops_keep_physical_policy: physical32+1 across Ready0/1 via drop_fixture, count0 and unsent1; both full drop batches and all33 wire values admit even without second snapshot. Control passes baseline.
+
+## Execution and validation
+
+Write tests, format and run cargo test --manifest-path packages/engine/Cargo.toml --locked --offline -p mornlea_server --lib actor_foot_ -- --nocapture under rustup run1.97.1. Expected twelve tests: ten causal failures and two controls pass, no compiler/fixture errors. Freeze qualified test tail before product; unchanged through GREEN12. A revised qualification restores exact accepted product bytes before rerunning RED. Implement exact private algorithm/guide, freeze source3, independent source SCOPED_PASS.
+
+Fresh focused gates: same actor_foot_12; --lib remote_admission_7, companion_admission_7, hostile_admission_8, passive_admission_9, projectile_admission_9, drop_admission_11, snapshot_selection_8, snapshot_admission_6; --test server_replay publication_192; --test server_contract prepared_publication8. Fresh env -u CARGO_TARGET_DIR make rust BEFORE any Go including nested full Rust world oracle. Full make rust-check expected3929PASS/76summaries70nonempty6empty/0failed0ignored/replay677, formatting/Clippy included. Unchanged Go race/count1 -v ./packages/server/server -run '^Test(RemotePlayer|CompanionPublication|HostilePublication|PassivePublication|ProjectilePublication)' expected26top (prepared publication controls, not full Pending runtime parity); actual Host MemoryTCP business1 separately. Closing audits4 and strict128. Protect original main/dev/archive plus frozen Go50+25 current/HEAD/parent.
+
+Record actual commands/counts/raw logs/frozen identities and isolated source/docs/immutable SCOPED_PASS; exact7path commit fix(server): gate actor visibility on queued foot snapshots. Root owns partial staging and inverse rollback without unrelated changes. Durable local handoff/COORD ACTIVE; no clean newSHA rerun claim. Broad3.8/4.1/4.2 remain OPEN. Architecture skill:no change unless verified stable rule warrants promotion; current existing Ready-vs-per-session publication rule already covers this predicate.

@@ -4,7 +4,7 @@ Rust shared contracts alone do not move authoritative ticks, validation or persi
 
 ## Status and prerequisites
 
-F2 planning is complete but implementation remains pending. Complete F1 is accepted at source `d042982d33bb1694d768b75b01c297bd02534a08` and corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`, covering112 supported points/1434 executed cases/zero gaps; see the [foundation seal](../rust-runtime-foundation-acceptance/acceptance.json). D0/P0/S0/K0 and the numerical implementation are implemented prerequisites. The initial runnable task verifies that seal and inventories source-bound server coverage. Parallel providers remain blocked until the new S1 compile-ready contract and consumer doubles are accepted on an implementation SHA. Planning validation cannot close an implementation checkbox.
+F2 implementation is in progress; whole-branch review has reopened integrated acceptance. Complete F1 is accepted at source `d042982d33bb1694d768b75b01c297bd02534a08` and corpus `sha256:8b5813ecce2fe866ab1c4786a35925e8aadd9aab476196abb189d3c72d4f28f3`, covering112 supported points/1434 executed cases/zero gaps; see the [foundation seal](../archive/2026-10-08-rust-runtime-foundation-acceptance/acceptance.json). D0/P0/S0/K0 and the numerical implementation are implemented prerequisites. The initial runnable task verifies that seal and inventories source-bound server coverage. Parallel providers remain blocked until the new S1 compile-ready contract and consumer doubles are accepted on an implementation SHA. Planning validation cannot close an implementation checkbox.
 
 ## What Changes
 
@@ -34,4 +34,4 @@ None. Existing wire, save and gameplay requirements remain the compatibility ora
 
 ## Deferred and abandoned
 
-Production Godot features and visual handoffs remain in P8–P12; distribution and default retirement remain P13–P14. No runtime implementation is claimed by this planning synchronization.
+Production Godot features and visual handoffs remain in P8–P12; distribution and default retirement remain P13–P14. Rule providers and contract tests are implemented, but complete executable runtime acceptance remains pending.

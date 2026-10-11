@@ -1,0 +1,34 @@
+[
+ {
+  "name": "31-parity-r3",
+  "exit": 0,
+  "elapsed_seconds": 3.34,
+  "source": "1b0367c5ac6caacefa9aa9274ca9086633e5d121",
+  "tree": "f660a17d34306ffdab586ac63e6e428744165ce9",
+  "sealed": true
+ },
+ {
+  "name": "32-persistence-full-r3",
+  "exit": 0,
+  "elapsed_seconds": 545.259,
+  "source": "1b0367c5ac6caacefa9aa9274ca9086633e5d121",
+  "tree": "f660a17d34306ffdab586ac63e6e428744165ce9",
+  "sealed": true
+ },
+ {
+  "name": "33-verifier-nul-r3",
+  "exit": 0,
+  "elapsed_seconds": 4.424,
+  "source": "1b0367c5ac6caacefa9aa9274ca9086633e5d121",
+  "tree": "f660a17d34306ffdab586ac63e6e428744165ce9",
+  "sealed": true
+ },
+ {
+  "name": "34-go-audit-r3",
+  "exit": 0,
+  "elapsed_seconds": 184.436,
+  "source": "1b0367c5ac6caacefa9aa9274ca9086633e5d121",
+  "tree": "f660a17d34306ffdab586ac63e6e428744165ce9",
+  "sealed": true
+ }
+]

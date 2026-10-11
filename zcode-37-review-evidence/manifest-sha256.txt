@@ -1,0 +1,15 @@
+06260a2a4e05f0962b875551098309117cf65566c0f426f9492861c22dfb2c3f  zcode-37-review-evidence/25-parity-review.json
+eaba670903c007824c3530965acc3a8b8f33e302ecde2b07612071265384c458  zcode-37-review-evidence/25-parity-review.log
+169d47362f32bf40f1c8f1b5dc2ff8bdec018d7799e1d33c95f1a86e45cdb040  zcode-37-review-evidence/26-persistence-full-postfix.json
+3754de91a7881b107426b3f4469f0fadac105a4b887ee32e1e1d2243c3b7488c  zcode-37-review-evidence/26-persistence-full-postfix.log
+0ab58841a9a74fb576fb38f6f68b0c60bebf6f9e18890758a0ed15dae7cd5290  zcode-37-review-evidence/27-go-audit.json
+6c7e7b3fa34b60f4d11b1b111984b314dfeb3cb6080ee84ae49416b22a80ea7c  zcode-37-review-evidence/27-go-audit.log
+2a5f09956aea9a192b78122fa6b7b404c8528b29d03fa673841c0826ac1e41dd  zcode-37-review-evidence/gen-inventory-binding.py
+8305393d3b7f7057e753e24a26a428d0722120473137e8082585d5cea8eafcca  zcode-37-review-evidence/inventory-binding.json
+f8ff7f068f26cc857f701ed910dd72ec4be868e1f1643349a2267971b0d1084f  zcode-37-review-evidence/inventory-binding.md
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  zcode-37-review-evidence/manifest-sha256.txt
+8b199ad784daa3b6d520ad60f8803dd70b4aeb3a9ce07977bccba3c2ba357146  zcode-37-review-evidence/REPORT-3.7-REVIEW.md
+ba584ac304572d78169f307bcb0495bd6421787cd8940d70f3073cf7b0663d9a  zcode-37-review-evidence/run-final.sh
+e54f669b9293776264eccdd0e24c67bfa43f65614a3de0def923b69bdcffc2f2  zcode-37-review-evidence/run-record.py
+b4632c343c209f6609549832b63912c6b9fd7c003dca5c969587b690f84a5eb2  zcode-37-review-evidence/selector-identities.txt
+53f2c1abc54ef27ceafe77cc37d0cc0f373a2e36a2fddd423fe7ea756fb6a862  zcode-37-review-evidence/summary.json

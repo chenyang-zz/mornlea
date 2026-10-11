@@ -3,7 +3,7 @@
 //! This is the chat fact an authoritative session confirms for one player,
 //! closed as a semantic union: every accepted wire combination of the Go
 //! `protocol.ChatEvent` validator has exactly one `ChatBody` variant, and
-//! every combination that validator rejects has no constructible state.
+//! rejected command restatements cannot enter the immutable `ChatEvent`.
 //! The Go record reuses one wire slot for the command and the speech text,
 //! one reason slot for the reject and failure reasons, and one companion
 //! identity that a rejected event may carry as zero; the domain closes all
@@ -186,18 +186,22 @@ pub struct ChatEvent {
 }
 
 impl ChatEvent {
-    /// Wraps one chat event, rejecting only a zero event id.
-    ///
-    /// Every other part is already a checked domain value — the player
-    /// identity a nonzero UUIDv4, the player name canonical, and the body a
-    /// closed union member whose variant list already encodes the Go
-    /// validator's cross-field rules — so the single relation left is that
-    /// the event id names an acknowledgment: zero is the absent form and is
-    /// rejected as `InvalidIdentity`, exactly as the Go validator's
-    /// `EventID == 0` gate. No field is normalized or rewritten.
+    /// Admits a nonzero event identity and canonical command restatements.
+    /// Saved task commands may preserve surrounding whitespace, but the source
+    /// wire event rule still rejects those bytes. No field is trimmed or rewritten.
     pub fn try_new(parts: ChatEventParts) -> Result<Self, DomainError> {
         if parts.event_id == 0 {
             return Err(DomainError::InvalidIdentity);
+        }
+        let command = match &parts.body {
+            ChatBody::Accepted { command, .. }
+            | ChatBody::QueueFull { command, .. }
+            | ChatBody::NotFollowing { command, .. }
+            | ChatBody::Task { command, .. } => Some(command),
+            _ => None,
+        };
+        if command.is_some_and(|command| !command.is_canonical()) {
+            return Err(DomainError::InvalidText);
         }
         Ok(Self {
             event_id: parts.event_id,

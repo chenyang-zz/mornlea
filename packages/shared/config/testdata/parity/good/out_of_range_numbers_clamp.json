@@ -1,0 +1,17 @@
+{
+  "physics": {
+    "walkSpeed": 0.01,
+    "gravity": 1000000000.0,
+    "eyeHeight": -5
+  },
+  "sim": {
+    "fluidUpdatesPerTick": 999999,
+    "dropPickupDelayTicks": 300,
+    "regenHungerThreshold": -2
+  },
+  "render": {
+    "viewDistance": 1000,
+    "lodFarMultiplier": 100
+  },
+  "cameraMode": 99
+}

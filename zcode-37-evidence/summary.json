@@ -1,0 +1,170 @@
+[
+ {
+  "name": "01-local-remote-parity",
+  "exit": 0,
+  "elapsed_seconds": 1.484,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:39:01.719300+00:00"
+ },
+ {
+  "name": "02-server-replay",
+  "exit": 0,
+  "elapsed_seconds": 8.635,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:39:03.359561+00:00"
+ },
+ {
+  "name": "03-server-contract",
+  "exit": 101,
+  "elapsed_seconds": 5.431,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:39:12.137431+00:00"
+ },
+ {
+  "name": "04-persistence-failure",
+  "exit": 101,
+  "elapsed_seconds": 28.348,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:39:17.732258+00:00"
+ },
+ {
+  "name": "05-agent-process",
+  "exit": 0,
+  "elapsed_seconds": 15.958,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:39:46.342356+00:00"
+ },
+ {
+  "name": "06-make-rust",
+  "exit": 0,
+  "elapsed_seconds": 400.835,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:40:02.440441+00:00"
+ },
+ {
+  "name": "07-go-oracle-step",
+  "exit": 0,
+  "elapsed_seconds": 9.54,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:46:43.535546+00:00"
+ },
+ {
+  "name": "08-go-oracle-network",
+  "exit": 0,
+  "elapsed_seconds": 2.654,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:46:53.199849+00:00"
+ },
+ {
+  "name": "09-go-oracle-login",
+  "exit": 0,
+  "elapsed_seconds": 24.629,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:46:56.111377+00:00"
+ },
+ {
+  "name": "10-go-oracle-local",
+  "exit": 0,
+  "elapsed_seconds": 13.271,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:47:20.888376+00:00"
+ },
+ {
+  "name": "11-go-oracle-tcp",
+  "exit": 0,
+  "elapsed_seconds": 76.941,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:47:34.352320+00:00"
+ },
+ {
+  "name": "12-go-oracle-persistence",
+  "exit": 0,
+  "elapsed_seconds": 5.535,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:48:51.490434+00:00"
+ },
+ {
+  "name": "13-go-oracle-region",
+  "exit": 0,
+  "elapsed_seconds": 2.86,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:48:57.208022+00:00"
+ },
+ {
+  "name": "14-go-oracle-storage",
+  "exit": 0,
+  "elapsed_seconds": 4.505,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:00.246785+00:00"
+ },
+ {
+  "name": "15-mcp-seventeenth-retry1",
+  "exit": 0,
+  "elapsed_seconds": 1.091,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:14.384947+00:00"
+ },
+ {
+  "name": "16-mcp-seventeenth-retry2",
+  "exit": 0,
+  "elapsed_seconds": 0.896,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:15.714189+00:00"
+ },
+ {
+  "name": "17-mcp-seventeenth-retry3",
+  "exit": 0,
+  "elapsed_seconds": 0.89,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:16.802947+00:00"
+ },
+ {
+  "name": "18-persistence-failure-with-fixtures",
+  "exit": 101,
+  "elapsed_seconds": 20.993,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:17.872716+00:00"
+ },
+ {
+  "name": "19-agent-process-nocapture",
+  "exit": 0,
+  "elapsed_seconds": 18.19,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:39.000731+00:00"
+ },
+ {
+  "name": "20-companion-agent-check",
+  "exit": 0,
+  "elapsed_seconds": 50.048,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:49:57.380024+00:00"
+ },
+ {
+  "name": "21-companion-agent-integration",
+  "exit": 0,
+  "elapsed_seconds": 68.958,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:50:47.657391+00:00"
+ },
+ {
+  "name": "22-pytest-shutdown-case",
+  "exit": 0,
+  "elapsed_seconds": 4.703,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:51:56.810065+00:00"
+ },
+ {
+  "name": "23-persistence-failure-fixtures-v2",
+  "exit": 101,
+  "elapsed_seconds": 566.376,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T07:52:12.159425+00:00"
+ },
+ {
+  "name": "24-server-contract-rerun",
+  "exit": 0,
+  "elapsed_seconds": 3.059,
+  "source": "6c20153c7792d72d4cbbd1e80ad3fa5b3f9e69d0",
+  "start": "2026-10-03T08:01:38.759256+00:00"
+ }
+]

@@ -18,7 +18,7 @@ func TestCIEntrypointsOwnRequiredCommands(t *testing.T) {
 		prerequisite string
 		commands     []string
 	}{
-		"ci-rust-quality":          {"", []string{"scripts/ci/doctor.sh rust", "$(MAKE) rust-check"}},
+		"ci-rust-quality":          {"", []string{"scripts/ci/doctor.sh rust", "$(MAKE) rust", "scripts/ci/run-rust-quality.sh"}},
 		"ci-frontend":              {"", []string{"scripts/ci/doctor.sh frontend", "$(MAKE) frontend-check"}},
 		"ci-native-linux":          {"", []string{"scripts/ci/doctor.sh native-linux", "$(MAKE) build-linux-server", "$(GO) test ./packages/shared/nativeabi ./packages/shared/core ./packages/shared/physics ./packages/client/mesh -race -count=1", "scripts/ci/verify-linux-bundle.sh --root \"$(CURDIR)\"", "scripts/ci/package-native-artifact.sh --platform linux-amd64 --sha \"$(CI_CANDIDATE_SHA)\" --root \"$(CURDIR)\" --manifest \"$(CI_LINUX_MANIFEST)\" --", "bin/mornlea-server bin/libmornlea_engine.so packages/engine/target/release/libmornlea_engine.so"}},
 		"ci-native-macos":          {"", []string{"scripts/ci/doctor.sh native-macos", "$(MAKE) rust", "scripts/ci/platform-id.sh", "scripts/ci/package-native-artifact.sh --platform \"$$platform\" --sha \"$(CI_CANDIDATE_SHA)\" --root \"$(CURDIR)\" --manifest \"$(CI_MACOS_MANIFEST)\" --", "packages/engine/target/release/libmornlea_engine.dylib packages/engine/target/release/libmornlea_client.dylib"}},
@@ -245,6 +245,67 @@ func TestCIIntegrationOrderedCommandsAndFailures(t *testing.T) {
 						t.Fatalf("commands = %q, want %q", got, want)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestCIRustQualityRealFixturePreparation(t *testing.T) {
+	const previous = "d042982d33bb1694d768b75b01c297bd02534a08"
+	for _, mode := range []string{"pass", "missing-source", "install-error", "fetch-error", "prepare-error", "check-error", "arguments"} {
+		t.Run(mode, func(t *testing.T) {
+			root, script := ciEntrypointFixture(t, "run-rust-quality.sh")
+			bin, log := ciCommandRecorder(t)
+			writeFile(t, filepath.Join(root, "packages/agent/.venv/bin/python"), nil)
+			writeExecutable(t, filepath.Join(root, "packages/agent/.venv/bin/python3"), "#!/usr/bin/env bash\nexit 0\n")
+			writeExecutable(t, filepath.Join(bin, "uv"), "#!/usr/bin/env bash\n[[ $PWD -ef \"$CI_TEST_ROOT/packages/agent\" ]] || exit 93\ncd \"$CI_TEST_ROOT\"\n"+strings.TrimPrefix(ciRecorderSource("uv"), "#!/usr/bin/env bash\n"))
+			git := ciRecorderSource("git")
+			if mode == "missing-source" || mode == "fetch-error" {
+				git += "[[ $1 != cat-file ]] || exit 1\n"
+			}
+			writeExecutable(t, filepath.Join(bin, "git"), git)
+			writeFile(t, filepath.Join(root, "scripts/rust-server-opt-in.sh"), []byte("#!/usr/bin/env bash\n[[ $(command -v python3) == \"$CI_TEST_ROOT/packages/agent/.venv/bin/python3\" ]] || exit 97\n"+strings.TrimPrefix(ciRecorderSource("prepare"), "#!/usr/bin/env bash\n")+"printf '%s' \"$5\" > \"$CI_TEST_ROOT/prepared-root\"\ntouch \"$5/previous-server\" \"$5/previous-runtime.json\"\n"))
+			writeExecutable(t, filepath.Join(bin, "make"), "#!/usr/bin/env bash\n[[ $MORNLEA_AGENT_PYTHON == \"$CI_TEST_ROOT/packages/agent/.venv/bin/python\" ]] || exit 94\n[[ $MORNLEA_PREVIOUS_SERVER_BIN == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-server\" ]] || exit 95\n[[ $MORNLEA_PREVIOUS_PACKAGE == \"$(cat \"$CI_TEST_ROOT/prepared-root\")/previous-runtime.json\" ]] || exit 96\n"+strings.TrimPrefix(ciRecorderSource("make"), "#!/usr/bin/env bash\n"))
+			failAt := map[string]int{"install-error": 1, "fetch-error": 3, "prepare-error": 3, "check-error": 4}[mode]
+			var args []string
+			if mode == "arguments" {
+				args = []string{"unexpected"}
+			}
+			output, err := ciRunWithEnv(t.TempDir(), bin+":"+os.Getenv("PATH"), []string{"CI_TEST_ROOT=" + root, "CI_TEST_LOG=" + log, fmt.Sprintf("CI_TEST_FAIL_AT=%d", failAt)}, script, args...)
+			if (err != nil) != (mode != "pass" && mode != "missing-source") {
+				t.Fatalf("unexpected result: %v\n%s", err, output)
+			}
+			if mode == "arguments" {
+				if _, statErr := os.Stat(log); !os.IsNotExist(statErr) {
+					t.Fatalf("unexpected arguments ran commands: %v", statErr)
+				}
+				return
+			}
+			got := strings.Split(strings.TrimSpace(string(readFile(t, log))), "\n")
+			want := []string{"uv\tsync\t--locked", "git\tcat-file\t-e\t" + previous + "^{commit}"}
+			if mode == "missing-source" || mode == "fetch-error" {
+				want = append(want, "git\tfetch\t--no-tags\torigin\t"+previous)
+			}
+			if len(got) > len(want) {
+				prepare := strings.Split(got[len(want)], "\t")
+				if len(prepare) != 6 || !slices.Equal(prepare[:5], []string{"prepare", "prepare-previous", "--source", previous, "--run-dir"}) || !filepath.IsAbs(prepare[5]) {
+					t.Fatalf("unexpected preparation command: %q", prepare)
+				}
+				want = append(want, got[len(want)])
+				want = append(want, "make\trust-check")
+				_, statErr := os.Stat(prepare[5])
+				if failAt > 0 && statErr != nil || failAt == 0 && !os.IsNotExist(statErr) {
+					t.Fatalf("package retention differs from result: %v", statErr)
+				}
+			}
+			if failAt > 0 {
+				if len(got) != failAt {
+					t.Fatalf("failed before intended command: %q\n%s", got, output)
+				}
+				want = want[:failAt]
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("commands = %q, want %q", got, want)
 			}
 		})
 	}

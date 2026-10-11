@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/persistence_failure.rs (packages/engine/target/cargo/debug/deps/persistence_failure-b02079f399f0af4d)
+
+running 1 test
+test activation::activation_verifier::manifest_batch_embedded_nul_and_truncation_refuse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 271 filtered out; finished in 4.10s
+

@@ -8,27 +8,46 @@
 //! verbatim: a mention that the authority later rejects still has to reach it
 //! exactly as typed.
 
+use crate::identity::DomainError;
 use crate::text::CommandText;
 
 /// One chat intent: the player's bounded command text, retained verbatim.
 ///
-/// The text is already a `CommandText`, so the rule that decides whether the
-/// text is publishable ran before this record existed and construction is total
-/// and named `new` rather than `try_new`. The record carries no sequence: chat
-/// travels on its own bounded channel rather than through the sequenced command
-/// stream, so a payload that named a sequence would claim an admission order it
-/// does not have.
+/// Live chat requires canonical text even when a source-valid saved task
+/// instruction is available. Construction checks that context without trimming.
+/// Chat carries no sequence and remains independent of sequenced world actions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatIntent {
     text: CommandText,
 }
 
 impl ChatIntent {
-    pub fn new(text: CommandText) -> Self {
-        Self { text }
+    pub fn try_new(text: CommandText) -> Result<Self, DomainError> {
+        if !text.is_canonical() {
+            return Err(DomainError::InvalidText);
+        }
+        Ok(Self { text })
     }
 
     pub fn text(&self) -> &CommandText {
         &self.text
+    }
+}
+
+#[cfg(test)]
+mod restored_input_tests {
+    use super::*;
+    #[test]
+    fn stored_task_text_does_not_bypass_canonical_human_chat_admission() {
+        let stored = CommandText::try_from_persisted(" work ".into()).unwrap();
+        assert_eq!(
+            ChatIntent::try_new(stored),
+            Err(crate::DomainError::InvalidText)
+        );
+        let canonical = CommandText::try_from_persisted("work".into()).unwrap();
+        assert_eq!(
+            ChatIntent::try_new(canonical).unwrap().text().as_str(),
+            "work"
+        );
     }
 }

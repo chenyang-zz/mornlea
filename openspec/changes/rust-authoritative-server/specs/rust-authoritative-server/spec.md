@@ -38,6 +38,13 @@ Memory and TCP sessions SHALL use identical login, packet, validation, sequencin
 - **WHEN** the server processes its result
 - **THEN** tick progress MUST remain bounded and the candidate MUST cause no unauthorized world effect
 
+#### Scenario: Stable loopback endpoint validation
+
+- **GIVEN** a configured companion uses an Agent endpoint containing text before its IPv6 opening bracket or a nested opening bracket
+- **WHEN** either Go or Rust validates the configuration
+- **THEN** it MUST reject that endpoint before issuing Agent requests, independent of the supported Go patch version
+- **AND** canonical IPv6 and mapped loopback literals MUST remain accepted, including valid paths containing bracket characters
+
 ### Requirement: Persistence failures preserve recoverability
 
 The Rust server SHALL preserve supported save migration, crash consistency and explicit I/O error behavior. A failed read or write MUST NOT silently reset a world, discard data, downgrade a schema or publish a successful durable result.
@@ -94,3 +101,19 @@ A contract or consumer-double pass SHALL NOT accept a provider or full integrati
 - **WHEN** the owner processes completion
 - **THEN** only validated committed revisions MUST be acknowledged and uncommitted snapshots MUST remain retryable
 - **AND** a corrupt active region payload eligible for fallback MUST load the older payload with the supported promoted logical revision and rewrite flag without writing during load
+
+#### Scenario: Hard authoritative tick failure
+
+- **GIVEN** a trusted reducer phase or delivery fails, or a provider unwinds after an accepted partial mutation
+- **WHEN** the executing tick returns
+- **THEN** the endpoint MUST return a retained failure without advancing its successful tick counter or delivering that failed publication
+- **AND** moved environmental schedules MUST return to their owner without claiming whole-tick mutation rollback
+- **AND** new resident captures, save selection and metadata targets MUST remain fenced, while already-selected immutable work retains ownership
+- **AND** the same failed authority MUST NOT replay the reduction or report a successful final tick/flush
+
+#### Scenario: Actual unpublished final reduction
+
+- **GIVEN** a healthy authority stops admission with accepted eligible commands
+- **WHEN** its actual final reducer runs
+- **THEN** it MUST execute the same phase engine with full declared budgets, commit successful accepted mutations and settle the environment once
+- **AND** it MUST append no publication frames and advance the final endpoint exactly once across retries

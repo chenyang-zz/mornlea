@@ -1,0 +1,15 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --test server_replay -- --exact publication_projection::projection_remote_lifecycle_spawn_states_despawn_order publication_projection::projection_despawn_families_emit_once publication_projection::projection_remote_reconnect_same_uuid_replaces_visible_incarnation publication_projection::projection_remote_reconnect_pending_gap_control
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:42Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/server_replay.rs (/workspace/ethan/target/debug/deps/server_replay-f1ad081c4434cf89)
+
+running 4 tests
+test publication_projection::projection_despawn_families_emit_once ... ok
+test publication_projection::projection_remote_lifecycle_spawn_states_despawn_order ... ok
+test publication_projection::projection_remote_reconnect_same_uuid_replaces_visible_incarnation ... ok
+test publication_projection::projection_remote_reconnect_pending_gap_control ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 681 filtered out; finished in 0.05s
+
+# exit: 0

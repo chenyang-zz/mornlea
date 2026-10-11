@@ -37,6 +37,11 @@ enforced by `tests/runtime_contract.rs` (`production_manifest_has_no_codec_kerne
   and no normalization: admission owns the trim, exactly as Go's normalizer
   returns its trimmed output. `CompanionName` additionally rejects embedded
   Unicode whitespace.
+- `CommandText::try_from_persisted` separately preserves source-valid saved
+  instruction bytes, including surrounding whitespace, within the same
+  1024-byte/control/nonblank bounds. Immutable chat observations and human
+  chat intents validate their stricter canonical context; planner/save payloads
+  retain source bytes. This adds no wire or save version.
 - The whitespace and control predicates are explicit character ranges
   (U+0009..000D, 0020, 0085, 00A0, 1680, 2000..200A, 2028, 2029, 202F, 205F,
   3000 and U+0000..001F, U+007F..009F), never a Unicode crate, so behavior
@@ -152,7 +157,9 @@ enforced by `tests/runtime_contract.rs` (`production_manifest_has_no_codec_kerne
 - `ChatIntent { text: CommandText }` in `input/chat.rs` is deliberately
   outside `Command`: chat has no wire sequence and is consumed through its own
   FIFO. It performs no addressing, warp, stop or queue policy, and the text is
-  retained verbatim including a leading mention.
+  retained verbatim including a leading mention. `ChatIntent::try_new` rejects
+  saved text with surrounding whitespace; a persisted instruction cannot
+  bypass canonical human chat admission.
 
 ## Command envelope and ordering (`src/input/order.rs`, `tests/command_order.rs`)
 
@@ -466,8 +473,9 @@ enforced by `tests/runtime_contract.rs` (`production_manifest_has_no_codec_kerne
 
 - `ChatEvent` (with `ChatEventParts`) is the chat fact an authoritative
   session confirms for one player: the issuing player's checked identity and
-  name plus the closed `ChatBody` union. `ChatEvent::try_new` rejects only a
-  zero event id (`InvalidIdentity`) and owns the checked player fields and
+  name plus the closed `ChatBody` union. `ChatEvent::try_new` rejects a zero
+  event id (`InvalidIdentity`) before noncanonical command restatements
+  (`InvalidText`), and owns the checked player fields and
   the body without normalization; the event id names the chat
   acknowledgment itself, not a `CommandEnvelope` sequence, because a chat
   command travels through its own FIFO with no sequence at all. The value

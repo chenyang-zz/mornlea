@@ -1,0 +1,26 @@
+[package]
+name = "mornlea_server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+getrandom = "=0.3.4"
+mornlea_domain = { path = "../mornlea_domain" }
+mornlea_engine = { path = "../mornlea_engine" }
+mornlea_protocol = { path = "../mornlea_protocol" }
+mornlea_storage = { path = "../mornlea_storage" }
+serde = "=1.0.229"
+serde_json = "=1.0.151"
+
+[dev-dependencies]
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation"] }

@@ -1,0 +1,1040 @@
+[
+ {
+  "id": "command.internal.bed",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "sleep::bed_partner_coordinate_edges_keep_representable_pairs",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "sleep::non_bed_target_is_silent_noop",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.internal.door",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::door_pair_and_internal_toggle",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::held_sneak_refuses_door_after_target_classification",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.BoneMeal",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "tools::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.ChatCommand",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.CloseContainer",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.CollectWater",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "tools::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.DropSelectedItem",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "drops::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.DropStack",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "drops::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.EquipArmor",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "inventory::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.KeepAliveReply",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.MoveContainerStack",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "containers::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.MoveCraftingStack",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "crafting::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.MoveInventoryStack",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "inventory::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.MoveStackPartial",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "inventory::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.OpenContainer",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "containers::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.PlaceBlock",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.PlaceWater",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "tools::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.PlayerInput",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "player_motion::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.QuickMoveStack",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "containers::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.RequestChunkResync",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "world_acquisition::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.SelectHotbar",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "inventory::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.TakeCraftingOutput",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "crafting::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "command.protocol.client.TillSoil",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "tools::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "companion.action.mine-hold",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "full_corpus::real_agent_candidate_admitted_and_stale_refused",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::mining_intents_stage_nothing_here",
+    "verified": true
+   },
+   {
+    "log": "19-agent-process-nocapture.log",
+    "test": "integration::rust_plan_python_mcp_and_authority",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "companion.action.mine-release",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "full_corpus::real_agent_candidate_admitted_and_stale_refused",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::neutral_hold_release_and_container_atomic",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "companion.action.move",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "full_corpus::real_agent_candidate_admitted_and_stale_refused",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::motion_steps_move_and_retains_yaw_neutral",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "companion.action.place",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "full_corpus::real_agent_candidate_admitted_and_stale_refused",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::placement_settles_in_id_order_with_atomic_refusals",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.client.ClientHello",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.client.KeepAliveReply",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.client.LoginStart",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   },
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.Disconnect",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "tcp::terminal_rejection_flushes_then_releases_socket",
+    "verified": true
+   },
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "tcp::terminal_poll_expiry_releases_socket",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.HandshakeReject",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.KeepAlive",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.LoginReject",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.LoginSuccess",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "control.protocol.server.ServerHello",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "common::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.block-changes",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.chat",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "25-parity-review.log",
+    "test": "integration::inventory_command_transcripts_match_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.chest-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "containers::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.chunk-snapshot",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "generation::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.combat-hit",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "hostile_outcomes::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.command-rejected",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.companion-despawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.companion-spawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.companion-states",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "companions::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.container-closed",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.crafting-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "crafting::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.forget-chunks",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "world_acquisition::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.furnace-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "furnaces::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.hostile-despawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "hostile_actors::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.hostile-spawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "hostile_actors::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.hostile-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "hostile_actors::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.inventory-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "inventory::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.item-drop-removes",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "drops::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.item-drop-upserts",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "drops::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.passive-despawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "passives::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.passive-spawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "passives::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.passive-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "passives::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.place-block-succeeded",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.player-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "player_survival::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.projectile-despawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "projectiles::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.projectile-spawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "projectiles::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.projectile-state",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "projectiles::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.remote-player-despawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "live::actual_reconnects_release_committed_driver_history_across_transports",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.remote-player-spawn",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "event.domain.remote-player-states",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "01-local-remote-parity.log",
+    "test": "integration::shared_transcript_matches_across_adapters",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.chunk",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.companion",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   },
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "actor_projection::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.hostile",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   },
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "actor_projection::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.passive",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   },
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "actor_projection::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.player",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.region",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "region_io::",
+    "verified": true
+   },
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "recovery::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "save.world-metadata",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "integration::real_save_restart_round_trip_through_store",
+    "verified": true
+   },
+   {
+    "log": "23-persistence-failure-fixtures-v2.log",
+    "test": "metadata_live::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "tick.phase.01.player-commands",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "phase_order::dispatch_chain_runs_in_frozen_order",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "phase_order::dispatch_guard_rejects_a_swapped_row",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "tick.phase.02.companion-actions",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "phase_order::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "tick.phase.03.physics-advance",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "player_motion::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "tick.phase.04.hostile-advance",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "hostile_actions::",
+    "verified": true
+   }
+  ]
+ },
+ {
+  "id": "tick.phase.05.block-updates",
+  "status": "BOUND",
+  "evidence": [
+   {
+    "log": "02-server-replay.log",
+    "test": "world_mutation::mutation_before_fluid_support_order",
+    "verified": true
+   },
+   {
+    "log": "02-server-replay.log",
+    "test": "phase_order::budget_carry_over_two_ticks",
+    "verified": true
+   }
+  ]
+ }
+]

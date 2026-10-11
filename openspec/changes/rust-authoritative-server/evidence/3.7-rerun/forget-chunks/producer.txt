@@ -1,0 +1,6 @@
+$ git grep -n -E 'Event::ForgetChunks\(|fn emit_forgets' -- packages/engine/crates/mornlea_server/src/core/publication_project.rs packages/engine/crates/mornlea_server/src/core/step.rs
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:37Z
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:958:fn emit_forgets(
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:979:                        Event::ForgetChunks(batch),
+# exit: 0

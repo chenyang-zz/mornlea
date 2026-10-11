@@ -1,0 +1,13 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --lib -- --exact core::state::owner_record_admission_tests::companion_admission_departure_and_arrival core::state::owner_record_admission_tests::companion_admission_despawn_preflight_retry
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:35Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (/workspace/ethan/target/debug/deps/mornlea_server-f180461c654d3941)
+
+running 2 tests
+test core::state::owner_record_admission_tests::companion_admission_departure_and_arrival ... ok
+test core::state::owner_record_admission_tests::companion_admission_despawn_preflight_retry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 637 filtered out; finished in 0.02s
+
+# exit: 0

@@ -1,0 +1,15 @@
+$ cd packages/engine && cargo test -p mornlea_server --locked --lib -- --exact core::state::owner_record_admission_tests::companion_admission_closed_owner_and_peer core::state::owner_record_admission_tests::companion_admission_departure_and_arrival core::state::owner_record_admission_tests::companion_admission_projection_then_queued core::state::owner_record_admission_tests::companion_admission_targeted_and_broadcast_ownership
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:05:31Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/workspace/ethan/target/debug/deps/mornlea_server-f180461c654d3941)
+
+running 4 tests
+test core::state::owner_record_admission_tests::companion_admission_targeted_and_broadcast_ownership ... ok
+test core::state::owner_record_admission_tests::companion_admission_closed_owner_and_peer ... ok
+test core::state::owner_record_admission_tests::companion_admission_projection_then_queued ... ok
+test core::state::owner_record_admission_tests::companion_admission_departure_and_arrival ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 635 filtered out; finished in 0.02s
+
+# exit: 0

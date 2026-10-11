@@ -1,0 +1,697 @@
+# 3.7 capability inventory bindings (round 3)
+
+Per-row specific evidence; wide prefixes are rejected by the generator.
+Classes: admission / provider / order-guard / real-integration.
+
+## command.internal.bed — BOUND (provider)
+- scenario: Night sleep settlement with two sleepers, a disconnect mid-sleep, a blocking awake player, and an empty active set; the bed anchor (40,1,40) sits in an unobserved chunk.
+- precondition: SleepState with one (session,OVERWORLD,unready_anchor) record at offset 0
+- precondition: environment staged at SETTLE_WORLD_TIME with winter-solstice season offset
+- precondition: sleepers/active lists vary per case
+- expected: Both asleep: applied 1, every sleeper wakes, record keeps only the unready anchor with morning offset, world time moves exactly to the seasonal morning arc start
+- expected: Disconnect mid-sleep: examined 3, applied 1, identical landing offset
+- expected: One awake: applied 0, record and sleeping list unchanged
+- expected: No active players: everything retained
+- assertion: outcome.report == PhaseReport{examined:4,applied:1} then {3,1} / {3,0} / applied==0
+- assertion: outcome.record == SleepState([(one,OVERWORLD,anchor)], EXPECTED_MORNING_OFFSET, Some(...))
+- assertion: effective_phase_at(COMPLETED_WORLD_TIME, offset, WINTER_SOLSTICE_SEASON_OFFSET) == 0
+- assertion: context.events() empty
+- ✓ [test] `sleep::seasonal_morning_disconnect_and_respawn` in `02-server-replay.log`
+## command.internal.door — BOUND (provider)
+- scenario: Door/bed placement through the provider, internal door toggle, and toggle refusal/no-op/reach rows.
+- precondition: Player with 1 door item (or empty hand) at yaw PI south-facing
+- precondition: AIR targets with STONE support; closed lower+single upper for toggle; bed look across the x=15/x=16 chunk seam
+- expected: PlaceBlock places DOOR_LOWER_NORTH_CLOSED + DOOR_UPPER both revision 2 and debits the item
+- expected: Bed places BED_FOOT_EAST/BED_HEAD_EAST revision 2, count 2->1
+- expected: Internal toggle flips lower to OPEN rev 2, upper keeps rev 1, no debit
+- expected: Missing/malformed partner, non-door target, beyond 6.0 reach all refuse with staged state unchanged
+- assertion: report == PhaseReport{examined:1,applied:1,rejected:0} on placement/toggle
+- assertion: lower_after.block==DOOR_LOWER_NORTH_CLOSED/OPEN with revision 2; upper keeps revision 1 on toggle
+- assertion: inventory slots[0] == ItemStack::default() after debit
+- assertion: probe(before)==probe(after) for every refusal case
+- ✓ [test] `world_mutation::door_pair_and_internal_toggle` in `02-server-replay.log`
+## command.protocol.client.BoneMeal — BOUND (provider)
+- scenario: Bone meal advances each crop family exactly one stage; mature plants/saplings refuse with state preserved.
+- precondition: Held BONE_MEAL count 2 at slot 0; ray hits WHEAT_STAGE_3 / POTATO_STAGE_6 / CARROT_STAGE_0 (and WHEAT_STAGE_7 / SAPLING for refusals) with AIR adjacent
+- expected: applied==1, crop advances exactly one block id, bone meal count 2->1
+- expected: Mature/sapling targets: provider errors, probe byte-identical to before
+- assertion: provider::run(...).applied == 1
+- assertion: cell(target).block == initial+1
+- assertion: held == stack(BONE_MEAL,1,0)
+- assertion: provider::run(...).is_err() and probe==before for WHEAT_STAGE_7 and SAPLING
+- ✓ [test] `tools::bone_meal_one_stage` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.ChatCommand — BOUND (admission)
+- scenario: A chat intent and a keep-alive reply submitted to an active session stay on the control plane and never enqueue a domain command.
+- precondition: One admitted Memory session (login tag 23 'Chatty')
+- precondition: PlayIntent::Chat with CommandText 'hello' and PlayIntent::KeepAliveReply{token:1}
+- expected: Both submit as SubmissionReceipt::ControlAccepted
+- expected: Sorted batch applies zero commands; next_arrival and last_applied_sequence stay 0
+- assertion: submit(chat) == ControlAccepted
+- assertion: submit(KeepAliveReply{token:1}) == ControlAccepted
+- assertion: apply_sorted_batch(0) is empty
+- assertion: facts.next_arrival == 0 and facts.last_applied_sequence == 0
+- ✓ [test] `session::chat_and_keepalive_stay_control_plane` in `24-server-contract-rerun.log`
+- ✓ [test2] `agent_host::plan_current_world_revalidation` in `24-server-contract-rerun.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.CloseContainer — BOUND (provider)
+- scenario: Open then close a furnace; a deferred MoveContainer after the close refuses against the cleared view; stale container generation refuses; open/close bind and release the same lease.
+- precondition: Session 11 with furnace at (0,65,-1) generation 1; inventory 10 dirt at slot 0
+- precondition: Sequences 1 Open, 2 Close, 3 MoveContainer(furnace 0->36)
+- expected: Drain: examined 3, applied 2, rejected 1 — only the late move refuses
+- expected: Inventory, container record, and item totals identical to before
+- expected: Reinstalled generation 2 makes the queued stale reference refuse (applied 1, rejected 1)
+- expected: Open against workbench/AIR refuses; settle binds viewer furnace_ref(0,1)
+- assertion: report == (3,2,1) then (2,1,1)
+- assertion: after_inventory == before && after_container == before && item totals preserved
+- assertion: ctx.read().viewer(session).unwrap().reference() == furnace_ref(0,1) after open
+- ✓ [test] `containers::late_close_and_generation` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.CollectWater — BOUND (provider)
+- scenario: Empty bucket collects a water source through flowing water; source clears, bucket becomes water bucket, one PlaceBlockSucceeded publishes.
+- precondition: Held EMPTY_BUCKET; ray cells [AIR, WATER_FLOWING, WATER_SOURCE]
+- precondition: Command::CollectWater(look) sequence 4; effects budget full
+- expected: applied==1; target WATER_SOURCE -> AIR, adjacent WATER_FLOWING untouched
+- expected: held -> stack(WATER_BUCKET,1,0); mining suppressed this tick only
+- expected: Exactly one Event::PlaceBlockSucceeded with sequence 4 to the owning session
+- assertion: cell(target).block == AIR and cell(adjacent).block == WATER_FLOWING
+- assertion: held == stack(WATER_BUCKET,1,0)
+- assertion: context.mining_suppressed(player) true then false next tick
+- assertion: events[0] is PlaceBlockSucceeded with sequence 4, recipient Session(session)
+- ✓ [test] `tools::bucket_source_and_flowing` in `02-server-replay.log`
+- ✓ [test2] `tools::bucket_failure_conservation` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.DropSelectedItem — BOUND (provider)
+- scenario: Dropping the selected tool moves the exact durable stack into the authoritative drop lane and empties the hotbar slot.
+- precondition: Session 1, slot 0 holds tool stack {item:10,count:1,durability:17}
+- precondition: Command::DropSelectedItem sequence 1 in the Interaction phase
+- expected: drops(key())[0].stack byte-identical to the held tool including durability
+- expected: slots[0] becomes ItemStack::default()
+- assertion: ctx.read().drops(key())[0].stack == tool
+- assertion: ctx.read().inventory(player).slots[0] == ItemStack::default()
+- ✓ [test] `drops::durable_selected_drop_preserves_item_identity` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.DropStack — BOUND (provider)
+- scenario: DropStack via each panel view removes the whole stack under the current crafting grid bounds; out-of-bounds panel slots refuse with InvalidSlot.
+- precondition: 19-count stack at Inventory slot 35 or crafting grid slots 3/4/8/44 with CraftingSize Personal/Workbench matching
+- expected: Valid views: drops(key())[0].stack == stack(1,19); repeated identical command refuses
+- expected: Invalid view: Err(RuleReject::Wire(RejectReason::InvalidSlot)) with snapshot identical
+- assertion: result.unwrap() then second settle errors for valid cases
+- assertion: result == Err(RuleReject::Wire(RejectReason::InvalidSlot)) and snapshot unchanged for invalid
+- ✓ [test] `drops::panel_views_remove_whole_authoritative_stack_with_dynamic_grid_bounds` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.EquipArmor — BOUND (provider)
+- scenario: EquipArmor moves the selected armor into its derived armor slot, swaps with a worn piece, touches only the derived slot, refuses non-armor.
+- precondition: Iron helmet durability 165 at slot 0; variants: helmet 100 pre-worn, chestplate 240 selected, stone sword 131 selected
+- expected: Empty slot: armor[0]==helmet(165), slots[0] empty, totals conserved
+- expected: Occupied: worn helmet returns to slot 0
+- expected: Cross-slot: chestplate lands armor[1], armor_points()==8
+- expected: Non-armor: errors with record unchanged
+- assertion: after.armor[0] == armor_stack(ITEM_IRON_HELMET,165) per case
+- assertion: item_totals(after) == item_totals(start)
+- assertion: provider::armor_points(&after.armor) == 8
+- assertion: outcome.is_err() and after == refused for the sword
+- ✓ [test] `inventory::armor_swap_and_zero` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.KeepAliveReply — BOUND (admission)
+- scenario: KeepAliveReply{token:1} on an active session is accepted on the control plane and never enqueues a sequenced command or consumes an arrival slot.
+- precondition: One admitted Memory session
+- precondition: PlayIntent::KeepAliveReply{token:1}
+- expected: SubmissionReceipt::ControlAccepted; empty sorted batch; watermarks 0
+- assertion: submit == ControlAccepted
+- assertion: apply_sorted_batch(0).is_empty()
+- assertion: facts.next_arrival == 0 and facts.last_applied_sequence == 0
+- ✓ [test] `session::chat_and_keepalive_stay_control_plane` in `24-server-contract-rerun.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.MoveContainerStack — BOUND (provider)
+- scenario: Whole container moves honor the furnace slot contract: output slot never a destination; quick-move fills smeltable input before fuel.
+- precondition: Furnace generation 1 with 3 iron ingots in output (or empty with 4 raw iron / 3 coal held)
+- precondition: ContainerMove::try_new(...,38) / MovePartial to 38 / QuickMove envelopes
+- expected: ContainerMove::try_new targeting slot 38 is Err at construction
+- expected: Partial move into output: applied 1, rejected 1, records identical
+- expected: QuickMove raw iron: container input becomes 4 raw iron, totals conserved
+- assertion: ContainerMove::try_new(0,0,Furnace,0,1,0,38).is_err()
+- assertion: report == (applied 1, rejected 1) with records unchanged
+- assertion: after_container == furnace_record(0,1,stack(RAW_IRON,4),default,default,0)
+- assertion: item_totals preserved
+- ✓ [test] `containers::furnace_output_and_priority` in `02-server-replay.log`
+- ✓ [test2] `containers::late_close_and_generation` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.MoveCraftingStack — BOUND (provider)
+- scenario: Unified crafting view maps grid 0..8 one-to-one and pack k to 9+k; whole moves cross the boundary exactly both ways; bench reaches 8 and 44.
+- precondition: slots[0]=3 stone, slots[1]=1 dirt; CraftingMove::try_new(9,0) then (0,9); Workbench record slots[35]=2 planks, move (44,8)
+- expected: pack0->grid0: crafting[0]==3 stone, slots[0] cleared, slot 1 untouched
+- expected: grid0->pack0 restores exactly
+- expected: Workbench edge moves reach grid 8 and pack 44 exactly
+- assertion: moved.crafting[0]==stack(ITEM_STONE,3) and moved.slots[0]==default and slots[1]==stack(ITEM_DIRT,1)
+- assertion: restored.slots[0]==stack(ITEM_STONE,3) and restored.crafting[0]==default
+- assertion: edge moves settle with exact cells moved
+- ✓ [test] `crafting::view_grid0_inventory9_boundary` in `02-server-replay.log`
+- ✓ [test2] `crafting::capacity_close_repack` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.MoveInventoryStack — BOUND (provider)
+- scenario: Whole MoveInventory moves (empty-target, merge, swap) settle and conserve the item multiset; replayed identical envelope refuses unchanged.
+- precondition: Cases: stone 7 slot1->13; stone 10 + 60 merge 0->9; grass 3 <-> dirt 4 swap 2->10
+- precondition: Duplicate arm: same envelope replayed after settlement
+- expected: Every case settles ok, changes the record, preserves item_totals
+- expected: First duplicate apply: slots[13]==7, slots[1] empty; replay refuses with record identical
+- assertion: outcome.is_ok() and after != start and item_totals conserved each case
+- assertion: once.slots[13]==stack(ITEM_STONE,7) and once.slots[1]==default
+- assertion: second.is_err() and twice == once
+- ✓ [test] `inventory::conservation_and_duplicate_command` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.MoveStackPartial — BOUND (provider)
+- scenario: Partial moves derive the ceiling half, move exactly one under the single flag, refuse zero-movable and unlike targets, truncate at capacity.
+- precondition: stone 5 ->slot4; dirt 5 vs dirt 64 full; dirt 7 vs 63 nearly full; stone 5 vs dirt 10 unlike; empty source
+- expected: Half of 5: slots[0]==2, slots[4]==3, totals conserved
+- expected: Single: 4/1 split
+- expected: Full/unlike/empty: err with record unchanged
+- expected: Nearly full: 6 remain, target 64
+- assertion: after.slots[0]==stack(ITEM_STONE,2) and after.slots[4]==stack(ITEM_STONE,3)
+- assertion: item_totals(after)==item_totals(start) on success
+- assertion: outcome.is_err() and after == start for refused cases
+- ✓ [test] `inventory::half_5_to_3_remainder_2` in `02-server-replay.log`
+- ✓ [test2] `containers::partial_absorb` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.OpenContainer — BOUND (provider)
+- scenario: OpenContainer against a ready chunk binds the exact chest slot and generation before any move; non-ready chunk refuses with ChunkNotReady.
+- precondition: Session 90, chest at (0,65,-1); first without the ready chunk, then with packed ready chunk chests[7] active generation 9
+- expected: Before readiness: Err(RuleReject::Wire(RejectReason::ChunkNotReady)), viewer None
+- expected: After readiness: open binds the exact slot/generation recorded in the chunk
+- assertion: settle_command == Err(RuleReject::Wire(RejectReason::ChunkNotReady))
+- assertion: ctx.read().viewer(session).is_none() before readiness
+- assertion: open settles against the ready chunk with the bound reference
+- ✓ [test] `containers::ready_open_binds_exact_slot_before_first_move` in `02-server-replay.log`
+- ✓ [test2] `containers::late_close_and_generation` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.PlaceBlock — BOUND (provider)
+- scenario: PlaceBlock deposits multi-cell door and bed placements with exact forms, revision 2, and item debit.
+- precondition: Held door item 1 (yaw PI south) or bed items 2 (look across the x=15/x=16 seam); AIR targets with STONE support
+- expected: Door: DOOR_LOWER_NORTH_CLOSED + DOOR_UPPER, revision 2, slots[0] emptied
+- expected: Bed: BED_FOOT_EAST + BED_HEAD_EAST, revision 2, count 2->1
+- assertion: observation(lower).block==DOOR_LOWER_NORTH_CLOSED with revision 2; same for upper
+- assertion: observation(foot/head)==BED_FOOT_EAST/BED_HEAD_EAST revision 2
+- assertion: slots[0] emptied (door) / count 1 (bed)
+- ✓ [test] `world_mutation::door_pair_and_internal_toggle` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.PlaceWater — BOUND (provider)
+- scenario: Full bucket places a water source on the face-adjacent cell (replacing flowing water or air), empties the bucket, suppresses mining, publishes one sequenced PlaceBlockSucceeded.
+- precondition: Held WATER_BUCKET; ray [AIR, WATER_FLOWING|AIR, STONE]; sequences 5 and 6
+- expected: Adjacent cell becomes WATER_SOURCE; held -> EMPTY_BUCKET; mining suppressed
+- expected: Exactly one PlaceBlockSucceeded with the command's sequence to the owning session
+- assertion: cell(adjacent).block == WATER_SOURCE
+- assertion: held == stack(EMPTY_BUCKET,1,0)
+- assertion: events[0] is PlaceBlockSucceeded with sequence 5/6
+- ✓ [test] `tools::bucket_source_and_flowing` in `02-server-replay.log`
+- ✓ [test2] `tools::bucket_failure_conservation` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.PlayerInput — BOUND (provider)
+- scenario: Latest-wins held input: an older westward input loses to the latest eastward input clipping a staged wall; a neutral input in staged water sinks with the golden fluid vector.
+- precondition: Actor (0.5,1.0,0.5) velocity (4.3,0,0) on ground; STONE wall x=1,y=1..=2; sequences 1 west then 2 east
+- precondition: Fluid case: actor (0.5,8.0,0.5) in WATER y=7..=9, neutral input
+- expected: Wall: pose bits exactly [0x3f333333,0x3f800000,0x3f000000], velocity x zeroed, on_ground true; runtime.controls carries the latest validated input
+- expected: Fluid: golden sink pose [0x3f000000,0x40ff7cee,0x3f000000] with vy -0.12999..., on_ground false
+- assertion: assert_motion(staged.motion, [0x3f333333,0x3f800000,0x3f000000],[0,0,0x80000000],true)
+- assertion: context.read().runtime(actor).controls == Some(winning control)
+- assertion: assert_motion(fluid, [0x3f000000,0x40ff7cee,0x3f000000],[0,0xbea3d70b,0],false)
+- ✓ [test] `player_motion::wall_fluid_fall_latest_input` in `02-server-replay.log`
+- ✓ [test2] `player_motion::invalid_clears_held` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.QuickMoveStack — BOUND (provider)
+- scenario: Quick-move merges same items in ascending slot order before empty slots, keeps partial remainders at source, reverses region order backpack->hotbar.
+- precondition: slots: 0 stone64, 2 dirt5, 9 stone63, 10 dirt10; QuickMove(Inventory,0); reverse (Inventory,9); partial case with backpack full of dirt except 9
+- expected: Hotbar->backpack: slot9 64, slot11 63, source cleared, totals conserved
+- expected: Partial: slot9 64, slot0 keeps 62
+- expected: Reverse: hotbar absorbs before backpack
+- assertion: after.slots[9]==64 and after.slots[11]==63 and slots[0]==default
+- assertion: after.slots[0]==stack(ITEM_STONE,62) in partial case
+- assertion: item_totals conserved each case
+- ✓ [test] `inventory::quick_regions_and_no_fit` in `02-server-replay.log`
+- ✓ [test2] `containers::furnace_output_and_priority` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.RequestChunkResync — BOUND (admission)
+- scenario: The RequestChunkResync packet (sequence 8, OVERWORLD, chunk -2,5, revision 9) is admitted by the real Memory adapter, the real TCP adapter, and the transport-free replay with identical ordered events and session facts.
+- precondition: Two logged-in sessions (Ada, Bea) on Memory and TCP plus a direct endpoint replay; the packet owned by Bea
+- expected: Each adapter admits the family; both ticks' transcripts (receipts, counters (10,0,0)/(10,0,1), ordered events, drained frames) match across all three runners
+- assertion: link.send == ConnectionProgress::Advanced{frames:1} with the family-named message
+- assertion: TCP submit count increments with the family-named message
+- assertion: assert_eq!(memory, tcp) and direct events/facts equal memory's
+- ✓ [test] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+- gap: No server_replay provider test implements the resync command's semantics; this row has admission/parity coverage only — the provider leg stays flagged until the reducer implements the family.
+## command.protocol.client.SelectHotbar — BOUND (provider)
+- scenario: SelectHotbar(4) stages exactly one inventory effect equal to the fixture state with selected slot 4 (canonical replay hash); duplicate select of the already-selected slot settles idempotently.
+- precondition: Record with stone 5 at slot 0 selected 0; envelope sequences 21 (slot 4), 22, 23 (slot 0 again)
+- expected: State hash equals canonical_state_sha256 of the selected-4 state
+- expected: settle yields the selected record; duplicate select of slot 0 changes nothing and never rejects
+- assertion: assert_expected(&observed, &Expected{events:[], state_sha256: canonical, counters: default})
+- assertion: settle(...).1 == start.with_selected(HotbarSlot::new(4))
+- assertion: duplicate outcome.is_ok() and after == start
+- ✓ [test] `inventory::conservation_and_duplicate_command` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.TakeCraftingOutput — BOUND (provider)
+- scenario: Every one of the 25 frozen recipes takes its exact output into the first empty pack slot, consumes the grid once, honors the mirror flag, never matches rotations; repeat takes re-settle only what the grid allows.
+- precondition: Each FROZEN_RECIPES shape on the grid; empty pack; TakeCraftingOutput
+- precondition: Repeat: 2-deep stone-brick grid, three takes
+- expected: slots[0] equals the sealed recipe triple; covered cells count 0
+- expected: Mirror matches iff mirror:true or mirrored==original; rotations refuse
+- expected: Two-deep takes twice (4+4 merged to 8), third refuses
+- assertion: report == (1,1); after.slots[0] == durable(output triple)
+- assertion: after.crafting.iter().all(|h| h.count==0)
+- assertion: once.slots[0]==stack(ITEM_STONE_BRICK,4) per take; third take errors
+- ✓ [test] `crafting::all_25_recipes_and_mirror` in `02-server-replay.log`
+- ✓ [test2] `crafting::capacity_close_repack` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## command.protocol.client.TillSoil — BOUND (provider)
+- scenario: TillSoil with the last hoe durability converts dirt/grass to dry farmland revision 2, breaks the hoe, charges the Till action, publishes no events.
+- precondition: Held STONE_HOE/IRON_HOE durability 1; ray [AIR, AIR, DIRT|GRASS] with AIR above; sequence 1
+- expected: applied==1; target FARMLAND_DRY revision 2; held becomes broken hoe durability 0
+- expected: Action charge (player, Till) recorded; mining not suppressed; no events
+- assertion: cell(target).block == FARMLAND_DRY and revision == 2
+- assertion: held == stack(BROKEN_HOE,1,0)
+- assertion: context.take_charges() == vec![(player, ActionKind::Till)]
+- assertion: context.events().is_empty()
+- ✓ [test] `tools::hoe_last_point` in `02-server-replay.log`
+- ✓ [transport] `integration::inventory_command_transcripts_match_across_adapters` in `25-parity-review.log`
+## companion.action.mine-hold — BOUND (real-integration)
+- scenario: A real Rust-to-Python/MCP plan ('采一块石头') drains through the real gateway/planner/model SDK and installs exactly one MineHold companion action a real authority accepts on a real tick; duplicates and superseded generations refuse.
+- precondition: Real helper child with MORNLEA_AGENT_PYTHON fixture; real lease + MCP serve; PlanDispatch companion/generation 7/source tick 99
+- precondition: CompanionIngress gate frozen from the dispatch identities
+- expected: install: installed 1, one envelope, action MineHold{target==target_pos}, source_tick 99, nonzero snapshot digest
+- expected: ingress.admit receipt.tick()==99; authority submit_companion queues at next tick; advance_tick publishes
+- expected: Duplicate submission: Err(InvalidInput{companion_action}); superseded generation: Err(InvalidInput{companion_generation})
+- assertion: assert_eq!(ticket.attempt,1); drained.completed==1 and failed==0
+- assertion: matches!(envelope.action, CompanionAction::MineHold{target} if target==target_pos())
+- assertion: duplicate and superseded refusals with exact identities
+- ✓ [test] `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+- ✓ [test2] `companions::neutral_hold_release_and_container_atomic` in `02-server-replay.log`
+## companion.action.mine-release — BOUND (real-integration)
+- scenario: Real-process admission/authority chain shared by all companion actions; after MineHold settles on a real tick, the release semantics are pinned at provider level.
+- precondition: Real helper/lease/MCP dispatch producing the MineHold envelope at tick 99
+- precondition: Provider scene: companion miner with stone pickaxe holding elapsed 2 on STONE
+- expected: Real lane: authority drains the admitted action on advance_tick; duplicate/superseded refuse with exact identities
+- expected: Provider leg: MineRelease as the first action of a new tick clears the mining record to None
+- assertion: publication.tick == state.next_tick()-1 after the companion queue drains
+- assertion: ingress duplicate refusal identity InvalidInput{companion_action}
+- assertion: (test2) context.read().mining(miner_key) == None after the release tick
+- ✓ [test] `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+- ✓ [test2] `companions::neutral_hold_release_and_container_atomic` in `02-server-replay.log`
+## companion.action.move — BOUND (real-integration)
+- scenario: Real-process admission/authority leg for the companion ingress shared by all action kinds; the move-specific provider leg pins motion semantics.
+- precondition: Real helper/lease/MCP dispatch and ingress gate as mine-hold
+- precondition: Provider scene: mover and idler companions, move_action(1,0,false,0.0) tag 10
+- expected: Real lane: one envelope admitted at tick 99, authority drains it, duplicates/stale refuse
+- expected: Provider leg: strafe moves +X past 2.5 keeping z 0.5 on_ground; idler retains yaw 0.7; no residue; no events
+- assertion: (real) receipt.tick()==99; duplicate Err InvalidInput{companion_action}
+- assertion: (test2) moved x>2.5, z==0.5, on_ground; idle yaw 0.7
+- assertion: runtime/mining None for both; events 0
+- ✓ [test] `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+- ✓ [test2] `companions::motion_steps_move_and_retains_yaw_neutral` in `02-server-replay.log`
+## companion.action.place — BOUND (real-integration)
+- scenario: Real-process admission/authority leg for place candidates; the place-specific provider leg pins multi-companion placement settlement.
+- precondition: Real lane as mine-hold; provider scene: four companions (first/second/stale-target/empty-handed) submit Place{shared|taken, DIRT} in reverse ID order
+- expected: Real lane: one envelope admitted at tick 99 on a real tick; duplicates/stale refuse
+- expected: Provider leg: lowest ID commits first — shared cell DIRT, first inventory 3->2; other three refuse atomically (4,1,3)
+- assertion: (real) receipt.tick()==99; stale generation Err InvalidInput{companion_generation}
+- assertion: (test2) report == PhaseReport{examined:4,applied:1,rejected:3}
+- assertion: observation(shared).block == DIRT; first.slots[0] dirt count 2
+- ✓ [test] `full_corpus::real_agent_candidate_admitted_and_stale_refused` in `02-server-replay.log`
+- ✓ [test2] `companions::placement_settles_in_id_order_with_atomic_refusals` in `02-server-replay.log`
+## control.protocol.client.ClientHello — BOUND (admission)
+- scenario: A ClientHello at the current protocol drives full admission on Memory and TCP: exactly one ServerHello, one prepare/install/activate/commit, play admitted at tick 0 arrival 0.
+- precondition: ConnectionCore with source handshake limits over a real AuthorityState; hello frame at Identities::current().protocol; StepClock
+- expected: ingest advanced 1; one frame; session Active; prepares==installs==activates==1
+- expected: A later play frame converts to QueuedForTick{tick:0,arrival_index:0}
+- assertion: expect_advanced(core.ingest(id, hello_frame(protocol())), 1)
+- assertion: frames[0] == control_frame(ServerHello::new(protocol()))
+- assertion: endpoint.prepares==1, installs==1, activates==1, commits==[ticket]
+- assertion: submits == [QueuedForTick{tick:0,arrival_index:0}]
+- ✓ [test] `common::valid_handshake_round_trip` in `01-local-remote-parity.log`
+- ✓ [test2] `common::unauthenticated_play_wrong_phase` in `01-local-remote-parity.log`
+## control.protocol.client.KeepAliveReply — BOUND (admission)
+- scenario: KeepAliveReply{token:1} on an active session is accepted as control traffic only: no command enqueue, no arrival slot.
+- precondition: Admitted Memory session (tag 23)
+- expected: ControlAccepted; empty batch; watermarks untouched
+- assertion: submit == SubmissionReceipt::ControlAccepted
+- assertion: apply_sorted_batch(0).unwrap().is_empty()
+- assertion: facts.next_arrival==0 and last_applied_sequence==0
+- ✓ [test] `session::chat_and_keepalive_stay_control_plane` in `24-server-contract-rerun.log`
+## control.protocol.client.LoginStart — BOUND (admission)
+- scenario: LoginStart following the acknowledged hello admits exactly once on both transports: prepare, install, activate, commit, Active session.
+- precondition: Connection at post-hello state; login_start_frame(tag,name) UUIDv4; scripted resolving load
+- expected: One prepare/install/activate/commit; Active; acknowledged handoff commits exactly once
+- assertion: endpoint.commits == vec![ticket.get()]
+- assertion: session phase == Active
+- assertion: expect_advanced(core.ingest(id, login_start_frame(...)), 1)
+- ✓ [test] `common::valid_handshake_round_trip` in `01-local-remote-parity.log`
+- ✓ [test2] `common::wrong_version_truncated_expired_refused` in `01-local-remote-parity.log`
+## control.protocol.server.Disconnect — BOUND (real-integration)
+- scenario: A real TCP disconnect with a save still pending retires the session but keeps the selected snapshot in flight; the completion acks the exact key/revision after the close.
+- precondition: Real TcpTransport loopback login (Ada); chunk snapshot revision 9 staged through the real dirty lane and selected (in_flight 1); server.close(id, PeerGone) in flight
+- expected: Session Retired after disconnect; in_flight stays 1
+- expected: apply_completion committed (key,9): acked 1, retry empty, in_flight 0
+- assertion: session(session).phase == SessionPhase::Retired
+- assertion: save_stats().in_flight == 1 after close, == 0 after completion
+- assertion: report.acked == 1 and report.retry.is_empty()
+- ✓ [test] `integration::tcp_disconnect_during_pending_save_keeps_save_in_flight` in `01-local-remote-parity.log`
+- ✓ [test2] `publication::silent_slow_receiver` in `24-server-contract-rerun.log`
+## control.protocol.server.HandshakeReject — BOUND (admission)
+- scenario: ClientHello at protocol()-1 answers exactly one HandshakeReject (packet id 1) carrying the server version, mismatch code and message, then closes before any session work.
+- precondition: Open connection; hello_frame(protocol()-1)
+- expected: One reject frame decoded as ServerPacket::HandshakeReject; no prepares
+- assertion: ingest closes; reject_frames.len()==1; packet_id==1
+- assertion: record.server_protocol_version == protocol()
+- assertion: record.code == HANDSHAKE_VERSION_MISMATCH
+- assertion: endpoint.prepares == 0
+- ✓ [test] `common::wrong_version_truncated_expired_refused` in `01-local-remote-parity.log`
+## control.protocol.server.KeepAlive — BOUND (admission)
+- scenario: A server KeepAlive reply (token 987) beside a broadcast event produces byte-identical owned frames on Memory and TCP with the exact little-endian token payload.
+- precondition: Two logged-in loopback TCP clients plus the memory drain; TickPublication with a broadcast CommandRejected and a KeepAlive(987) control reply per session
+- expected: forwarded == memory frames (2 each); packet id == KeepAlive id; payload == 987u64.to_le_bytes(); TCP client reads the same frames in order
+- assertion: assert_eq!(forwarded, memory)
+- assertion: keep.packet_id == keep_alive.key().id and keep.payload == 987u64.to_le_bytes()
+- assertion: bea_client.next_frame() == memory[0] then memory[1]
+- ✓ [test] `tcp::mixed_publication_has_identical_owned_memory_and_tcp_frames` in `01-local-remote-parity.log`
+## control.protocol.server.LoginReject — BOUND (admission)
+- scenario: LoginReject identities: invalid identity answers LOGIN_INVALID_IDENTITY without admission; failed load answers LOGIN_STORE_UNAVAILABLE with message 玩家数据暂不可用 and no double cancel.
+- precondition: Post-hello connections; raw_identity_login_frame(); scripted LoadOutcome::Failed(Io TimedOut)
+- expected: One reject frame each with exact codes/messages; prepares unchanged; cancels not duplicated
+- assertion: record.code == LOGIN_INVALID_IDENTITY and prepares unchanged
+- assertion: record.code == LOGIN_STORE_UNAVAILABLE and message == 玩家数据暂不可用
+- assertion: endpoint.cancels.len() unchanged
+- ✓ [test] `common::wrong_version_truncated_expired_refused` in `01-local-remote-parity.log`
+## control.protocol.server.LoginSuccess — BOUND (admission)
+- scenario: The queued LoginSuccess is byte-equal to the independently encoded record; play before the send acknowledgment is unauthenticated; the acknowledged handoff commits exactly once.
+- precondition: Connection driven to the queued-success handoff on Memory; world seed 7
+- expected: frames[0] == control_frame(LoginSuccess(player(1), 7))
+- expected: Pre-ack play closes InvalidPlay with zero submits/activates
+- expected: Post-ack: commits==[ticket], Active, play admitted
+- assertion: frames[0] == control_frame(&expected)
+- assertion: CloseReason::InvalidPlay with submits 0 and activates 0 pre-ack
+- assertion: commits == vec![ticket.get()] and Active post-ack
+- assertion: expect_advanced(ingest(play_frame(1)), 1) and submits.len()==1
+- ✓ [test] `common::login_success_send_ack_before_play` in `01-local-remote-parity.log`
+- ✓ [test2] `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+## control.protocol.server.ServerHello — BOUND (admission)
+- scenario: The negotiated ServerHello is byte-equal to an independently encoded control frame on both Memory and TCP.
+- precondition: Fresh core/endpoint per transport; hello at current protocol
+- expected: Exactly one frame; bytes equal control_frame(ServerHello::new(protocol()))
+- assertion: frames.len()==1
+- assertion: frames[0] == control_frame(&expected)
+- assertion: loop covers both TransportKind::Memory and Tcp
+- ✓ [test] `common::valid_handshake_round_trip` in `01-local-remote-parity.log`
+## event.domain.block-changes — BOUND (provider)
+- scenario: State-level anchor: door and bed placements write the exact block ids at both cells with revision 2 and one item debit; the Rust authority does not yet publish Event::BlockChanges.
+- precondition: AIR targets with STONE supports; held door/bed items
+- expected: lower/upper (or foot/head) cells carry the exact placement forms at revision 2
+- assertion: lower_after.block==DOOR_LOWER_NORTH_CLOSED with revision 2; upper DOOR_UPPER revision 2
+- assertion: foot/head BED_FOOT_EAST/BED_HEAD_EAST revision 2
+- ✓ [test] `world_mutation::door_pair_and_internal_toggle` in `02-server-replay.log`
+## event.domain.chat — OPEN (admission)
+- gap: No test in the five cited suites asserts Event::Chat content or ordering. Chat control-plane admission is pinned by session::chat_and_keepalive_stay_control_plane (24-server-contract-rerun.log) and the chat-to-plan leg by agent_host::plan_current_world_revalidation, but neither asserts the Chat event payload. A specific ChatEvent content/recipient/order test is missing; the Rust authority does not yet publish the Chat event.
+## event.domain.chest-state — BOUND (provider)
+- scenario: State-level anchor: a partial move writes exactly 4 dirt into chest slot 0 (and truncates to 64 in the nearly-full arm) with totals conserved; Event::ChestState not yet published.
+- precondition: Open chest lease generation 1; inventory 7 dirt slot 0; MovePartial(Container,0,36,false) after open
+- expected: Chest slot content and conservation exactly as the Go split rule
+- assertion: container_cells(after)[0] == stack(ITEM_DIRT,4) with inventory remainder 3
+- assertion: item_totals conserved
+- assertion: nearly-full arm: chest slot 64, source 6
+- ✓ [test] `containers::partial_absorb` in `02-server-replay.log`
+## event.domain.chunk-snapshot — BOUND (provider)
+- scenario: A checked domain ChunkSnapshot event converts to its ServerPacket, encodes into a bounded prepared frame (packet id 0), decodes back, and returns the identical domain event.
+- precondition: air_snapshot() domain value; real ProtocolCodec; PreparedFrame::encode
+- expected: frame.packet_key() == packet.key(); within MAX_FRAME_BYTES+5; wire.packet_id == 0; decoded equals original
+- assertion: assert_eq!(frame.packet_key(), packet.key())
+- assertion: wire.consumed == frame.byte_len() and wire.packet_id == 0
+- assertion: Event::try_from(ServerPacket::ChunkSnapshot(decoded)) == Event::ChunkSnapshot(domain)
+- ✓ [test] `chunk_encoding::actual_factory_retains_exact_capture_and_roundtrips_air` in `24-server-contract-rerun.log`
+## event.domain.combat-hit — BOUND (provider)
+- scenario: A lethal melee hit publishes exactly one attacker-only CombatHit before death staging; the death phase stages loot and Dead while the event lane stays exactly as combat left it.
+- precondition: Attacker session 1; hostile id 7 health 2 with runtime and empty home chunk; HostileMeleeBatch at the context tick
+- expected: advance: applied 1, one event to Session(attacker) matching Event::CombatHit
+- expected: death run: (1,1), lifecycle Dead, loot stack(45,1,0), events still exactly the single CombatHit
+- assertion: ctx.events().len()==1, recipient Session(attacker), matches CombatHit
+- assertion: lifecycle == Dead; drop_stacks == vec![stack(45,1,0)]
+- assertion: every staged event still CombatHit after death
+- ✓ [test] `hostile_outcomes::combat_hit_events_precede_death_staging` in `02-server-replay.log`
+- ✓ [test2] `tick_state::live_projectile_hit_publishes_final_player_state_before_confirmation` in `02-server-replay.log`
+## event.domain.command-rejected — BOUND (real-integration)
+- scenario: The shared transcript's second tick resubmits Ada's applied sequence 4 producing exactly one stale refusal among the ordered outputs; ordered event lists asserted identical across Memory and TCP.
+- precondition: Two logged-in players per adapter; submits (Ada 5,6; Bea 1) tick 0, then (Ada stale 4; Bea 2) tick 1; real advance_tick on both adapters
+- expected: Tick 1 counters (commands 2, carried 0, stale 1); identical ordered events and drained frames on both adapters
+- assertion: tick_counters(&second) == (2,0,1)
+- assertion: event_order per tick compared: assert_eq!(memory, tcp)
+- assertion: session numbering [1,2] on both adapters
+- ✓ [test] `integration::shared_transcript_matches_across_adapters` in `01-local-remote-parity.log`
+- ✓ [test2] `tick::stale_batch_ordering_counts_duplicates` in `24-server-contract-rerun.log`
+## event.domain.companion-despawn — OPEN (provider)
+- gap: No Rust test asserts companion despawn/removal: Event::CompanionDespawn is never constructed in mornlea_server tests and companions.rs has no despawn case (families: intent/mining/motion/hold-release/place/wrong-shapes only). A specific companion despawn provider or integration test is missing.
+## event.domain.companion-spawn — OPEN (provider)
+- gap: No Rust test asserts companion spawning: Event::CompanionSpawn never constructed; companions are pre-staged via RuleEffect::Actor in every scene. Companion spawn admission/capacity exists only on the hostile and passive families; this row lacks a specific test.
+## event.domain.companion-states — BOUND (provider)
+- scenario: State-level anchor: the stepped mover's position/look/on_ground and the idler's retained yaw asserted exactly, with no residual runtime/mining lanes and no events.
+- precondition: Mover and idler companion actors staged; move_action(1,0,false,0.0) tag 10; motion phase call
+- expected: Mover x>2.5, z 0.5, on_ground, yaw 0.0; idler yaw retained 0.7
+- assertion: moved x>2.5 and z==0.5 and on_ground()
+- assertion: idle.look.yaw()==0.7
+- assertion: runtime None both; mining None; events 0
+- ✓ [test] `companions::motion_steps_move_and_retains_yaw_neutral` in `02-server-replay.log`
+## event.domain.container-closed — BOUND (provider)
+- scenario: State-level anchor: after CloseContainer drains, the viewer lease is cleared so a deferred container move refuses and the container record is untouched; open/close bind and release the same lease.
+- precondition: Open (seq 1), Close (seq 2), MoveContainer (seq 3) queued before one drain
+- expected: Drain (3,2,1): only the late move refuses; inventory/container/totals identical
+- assertion: report 3/2/1
+- assertion: after_inventory == before && after_container == before
+- assertion: events empty
+- ✓ [test] `containers::late_close_and_generation` in `02-server-replay.log`
+## event.domain.crafting-state — BOUND (provider)
+- scenario: State-level anchor: each take consumes the matched grid cells to zero and credits the exact recipe output; refused variants keep the grid unchanged.
+- precondition: Each frozen recipe grid staged; TakeCraftingOutput
+- expected: slots[0] == sealed output triple; covered cells count 0; refusals keep the grid
+- assertion: after.slots[0] == durable(output triple)
+- assertion: after.crafting.iter().all(|h| h.count==0)
+- assertion: refused mirror keeps grid unchanged
+- ✓ [test] `crafting::all_25_recipes_and_mirror` in `02-server-replay.log`
+## event.domain.forget-chunks — OPEN (provider)
+- gap: Event::ForgetChunks is never constructed or asserted in the five suites. Nearest capability anchor is world_acquisition::drained_repeat_not_reinstalled (state-level, 02 log), which pins that a forgotten chunk completion is not reinstalled — but no test asserts the forget-chunks event content/recipient.
+## event.domain.furnace-state — BOUND (provider)
+- scenario: State-level anchor: ignition consumes one coal (burn 1599, progress 1, input kept); after 200 smelt ticks one input converts to one iron ingot with burn 1400, progress 0.
+- precondition: Furnace generation 1 with input 4 raw iron, fuel 1 coal; advance per tick over FURNACE_SMELT_TICKS
+- expected: Slot triples and counters exactly as the Go 1600/200 timing
+- assertion: tick 1: slots[0] raw iron 4, burn 1599, progress 1
+- assertion: after smelt: slots[0]==3, slots[2]==stack(ITEM_IRON_INGOT,1), burn 1400, progress 0
+- assertion: events empty
+- ✓ [test] `furnaces::fuel_1600_smelt_200` in `02-server-replay.log`
+## event.domain.hostile-despawn — BOUND (provider)
+- scenario: State-level anchor: a killing hit leaves the hostile Active at zero health; the same-tick death phase settles loot plus Dead exactly once; a repeated death phase settles nothing further.
+- precondition: Attacker session; hostile id 7 health 2; empty home chunk (0,-1) preloaded; bare-fist melee batch
+- expected: Death-before-combat stages nothing; after hit health 0 but Active; death phase Dead + one flesh drop; repeat nothing
+- assertion: first death run == (0,0,0) and events empty
+- assertion: after hit: health 0, Active, events 1
+- assertion: death run == (1,1,0); Dead; drop_stacks == vec![stack(45,1,0)]
+- assertion: repeated run == (0,0,0)
+- ✓ [test] `hostile_outcomes::lethal_player_hit_settles_hostile_death_once` in `02-server-replay.log`
+## event.domain.hostile-spawn — BOUND (provider)
+- scenario: State-level anchor: at effective phase exactly 23000 one candidate spawns at the derived column with full health and kind by id mod 3; one tick past the window refuses; 64 residents refuse the 65th.
+- precondition: Anchor session; flat column preloaded Ready; environment at boundary tick (and 23001); 64 distant residents for the cap
+- expected: Spawn: hostile_count 1, one candidate applied, position/health/kind exact, fresh flag consumed
+- assertion: hostile_count==1 and report.applied==1
+- assertion: body.position == [x+0.5,1.0,z+0.5], health 20, kind by id%3
+- assertion: late tick: hostile_count==0; cap: 64
+- ✓ [test] `hostile_actors::night_tie_capacity_distance` in `02-server-replay.log`
+## event.domain.hostile-state — BOUND (provider)
+- scenario: State-level anchor: the spawned walker/hurler's exact body (position, health 20, kind) and runtime aux (distant_ticks 0, shoot_cooldown 0, fresh consumed), plus the equal-distance tie preferring the smaller player id.
+- precondition: Same boundary scene; two-session tie scene with a staged hostile between equidistant players
+- expected: Runtime transients exact; tie resolves by player UUID bytes, not session key
+- assertion: ActorAux::Hostile{distant_ticks:0, shoot_cooldown:0, fresh:false}
+- assertion: body position/health/kind exact
+- assertion: tie picks the smaller player id
+- ✓ [test] `hostile_actors::night_tie_capacity_distance` in `02-server-replay.log`
+## event.domain.inventory-state — BOUND (provider)
+- scenario: State-level anchor: exact post-move slot contents for half, single, capacity-truncated, refused-unlike, and empty-source partial moves with conservation on every success.
+- precondition: Record states with stone/dirt stacks at slots 0 and 4
+- expected: Exact slot-by-slot outcomes with item_totals preserved; refusals leave the record identical
+- assertion: after.slots[0]==stack(ITEM_STONE,2) and after.slots[4]==stack(ITEM_STONE,3)
+- assertion: tight case: slot4 64, slot0 6
+- assertion: refused cases: after == start
+- ✓ [test] `inventory::half_5_to_3_remainder_2` in `02-server-replay.log`
+## event.domain.item-drop-removes — BOUND (provider)
+- scenario: State-level anchor: pickup lands only within the exact 1.25 radius (1.251 misses); at age 5999 the next advance expires the drop instead of picking it up.
+- precondition: Seeded drop count 2; player at 1.25/1.251; aged case age_ticks 5999 at distance 0
+- expected: Radius boundary applied 1/0 with drops emptied only on pickup; aged: applied 1, drops emptied, slot count still 0
+- assertion: report.applied == usize::from(picked) for (1.25,true),(1.251,false)
+- assertion: aged: drops empty and slots[0].count == 0
+- ✓ [test] `drops::exact_pickup_radius_and_age_expiry_precedes_pickup` in `02-server-replay.log`
+## event.domain.item-drop-upserts — BOUND (provider)
+- scenario: State-level anchor: a newly created drop carries the exact durable stack identity in the authoritative drop store while the source slot empties.
+- precondition: Tool stack {item:10,count:1,durability:17} slot 0; DropSelectedItem
+- expected: drops[0].stack byte-identical to the held tool; slot 0 emptied
+- assertion: ctx.read().drops(key())[0].stack == tool
+- assertion: slots[0] == ItemStack::default()
+- ✓ [test] `drops::durable_selected_drop_preserves_item_identity` in `02-server-replay.log`
+## event.domain.passive-despawn — BOUND (provider)
+- scenario: State-level anchor: a zero-health cow settles Dead with exactly one raw beef drop at its death chunk, atomically.
+- precondition: Dying cow id off the graze roll, health 0, empty home chunk preloaded
+- expected: Dead, health 0, one ITEM_RAW_BEEF stack, rejected 0, no events
+- assertion: lifecycle == ActorLifecycle::Dead and health 0
+- assertion: drop_stacks == vec![ItemStack{item:ITEM_RAW_BEEF,count:1,durability:0}]
+- assertion: rejected==0 and events empty
+- ✓ [test] `passives::passive_death_stages_beef_and_dead_atomically` in `02-server-replay.log`
+## event.domain.passive-spawn — BOUND (provider)
+- scenario: State-level anchor: known-answer candidate hashes; clean resident set spawns the derived candidate at the exact fresh-skip pose; the 33rd resident refused at the cap.
+- precondition: Environment seed 1, anchor player, staged candidate triple at the derived column; 32 distant residents for the cap arm
+- expected: Spawned id == candidate_hash; pose [x+0.5,1.0,z+0.5]; fresh cleared; report (3,0)
+- assertion: candidate_hash(0,13001,24,1,0)==0x8bcd14a8d5cf3d91 and (-42,...)==0xedf4e30235ad740a
+- assertion: active_passive_ids == vec![expected_id]
+- assertion: position exact and !fresh; cap refuses the 33rd
+- ✓ [test] `passives::resident_32_33_and_restore_transient` in `02-server-replay.log`
+## event.domain.passive-state — BOUND (provider)
+- scenario: State-level anchor: known-answer graze rolls; wheat held at exactly 8 blocks closes distance; sustained pursuit keeps closing over 10 advances.
+- precondition: Room staged; cow fixture id off the graze roll with positive-x wander; player 10.5 holding wheat
+- expected: First step: horizontal distance squared < 64.0; sustained ticks keep closing
+- assertion: graze KATs: !(0,0,41), !(7,600,0), (0,103,41), (0,180,777)
+- assertion: distance < 64.0 on the boundary step
+- assertion: settled distance strictly smaller after pursuit
+- ✓ [test] `passives::tempt_8_stop_2_5_and_graze20` in `02-server-replay.log`
+## event.domain.place-block-succeeded — BOUND (provider)
+- scenario: The provider test asserting the Event::PlaceBlockSucceeded payload: collect and place water each publish exactly one sequenced PlaceBlockSucceeded routed to the owning session.
+- precondition: Bucket scenes as the CollectWater/PlaceWater rows
+- expected: Exactly one event per successful bucket action carrying the command's sequence, addressed to the session
+- assertion: context.events().len()==1
+- assertion: events[0] is PlaceBlockSucceeded with sequence 4 (and 5, 6 in the place arms)
+- assertion: recipient == EventRecipient::Session(session.get())
+- ✓ [test] `tools::bucket_source_and_flowing` in `02-server-replay.log`
+## event.domain.player-state — BOUND (provider)
+- scenario: The real reducer publishes exactly one final private PlayerState per live tick after environment settlement (server_tick, advanced world time, resident motion) reaching the session's wire as exactly one packet-id-3 frame.
+- precondition: Real AuthorityState with logged-in seeded player; two advance_tick/publish cycles; retirement case at the end
+- expected: One PlayerState per tick with server_tick completed-1 and world_time_ticks completed; motion equals residents; one owned wire frame; retirement stops the observation
+- assertion: states.len()==1 with server_tick and world_time exact
+- assertion: states[0].motion() == authority.residents().actors[0].motion
+- assertion: player_frames.len()==1 with packet_id==3
+- assertion: after retire: no PlayerState in the next publication
+- ✓ [test] `tick_state::live_player_state_reaches_owned_wire_after_environment_settlement` in `02-server-replay.log`
+## event.domain.projectile-despawn — BOUND (provider)
+- scenario: State-level anchor: a projectile at age 100 entering the flight phase expires immediately, leaving the store empty.
+- precondition: Projectile id 1 staged at age 100; one advance over its scope
+- expected: snapshot_state(world()).projectiles empty after the step
+- assertion: ctx.snapshot_state(world()).projectiles.is_empty()
+- ✓ [test] `projectiles::age_100_expires_at_entry` in `02-server-replay.log`
+## event.domain.projectile-spawn — BOUND (provider)
+- scenario: State-level anchor: the bounded lane holds 128; the 129th spawn evicts exactly id 1 leaving 2..=129; zero damage, stale birth tick, oversized damage refuse without mutation.
+- precondition: 128 projectiles staged; candidate 129 variants (damage 0, age 1, damage 21, valid)
+- expected: Invalid spawns refuse with snapshot identical; the production spawn evicts the oldest
+- assertion: provider::spawn(invalid).is_err() and snapshot == before for all three invalid forms
+- assertion: ids == (2..=129) after the valid spawn
+- ✓ [test] `projectiles::spawn_129_evicts_1` in `02-server-replay.log`
+## event.domain.projectile-state — BOUND (provider)
+- scenario: State-level anchor: the first flight step applies gravity-first integration with exact velocity [22,-0.9,0], position [1.6, 30-0.045, 0.5], age 1.
+- precondition: Projectile id 1 at (0.5,30.0,0.5) velocity (22,0,0); one advance
+- expected: Exact float values for velocity, position, and age after one step
+- assertion: velocity == [22.0, -0.9, 0.0]
+- assertion: position == [1.6, 29.955, 0.5] bits exact
+- assertion: age == 1
+- ✓ [test] `projectiles::gravity_first_lifetime` in `02-server-replay.log`
+## event.domain.remote-player-despawn — OPEN (provider)
+- gap: Event::RemotePlayerDespawn is never constructed or asserted in the five suites. The parity transcript closes both players (Retired) and tick_state pins that retirement stops the private PlayerState observation, but no test asserts the remote-player-despawn event content/recipient.
+## event.domain.remote-player-spawn — OPEN (provider)
+- gap: Event::RemotePlayerSpawn is never constructed or asserted; the two-player parity transcript implies the scene but asserts no spawn event. A specific spawn-event payload/recipient test for an observing peer is missing.
+## event.domain.remote-player-states — OPEN (provider)
+- gap: Event::RemotePlayerStates is never constructed or asserted; the Rust authority currently publishes only the per-session private PlayerState observation (tick_state::live_player_state_reaches_owned_wire_after_environment_settlement). No remote-peer fan-out test exists.
+## save.chunk — BOUND (real-integration)
+- scenario: All six save families including the chunk stage through the real dirty lane, select (6 in flight), commit by a real DiskStore write+sync, ack, and reload from a reopened store: chunk revision 9 with all 24 sections still block 2.
+- precondition: OwnedSnapshot chunk at ChunkKey(3,-1) revision 9 (24 sections single=2) plus the other five families remembered dirty; real temp world root
+- expected: select len 6; committed 6 no error; acks 6, in_flight 0; reopen with create seed 99 keeps stored seed 13 and the exact chunk payload
+- assertion: selected.len()==6 and in_flight==6
+- assertion: completion.error.is_none() and committed.len()==6
+- assertion: report.acked==6 and retry empty
+- assertion: reopened.metadata().seed==13
+- assertion: recovered.revision==9 and persisted_revision==9 and sections 24 all single==2
+- ✓ [test] `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `region_io::four_crash_points_old_or_new` in `23-persistence-failure-fixtures-v2.log`
+## save.companion — BOUND (real-integration)
+- scenario: The Companions family snapshot (revision 9) commits through the real DiskStore in the six-family batch and reloads exactly.
+- precondition: CompanionSave revision 9 with namespace identity remembered dirty beside the other five families; real temp root
+- expected: Committed in the real write; the round trip proves every family pending exactly once
+- assertion: selected.len()==6 with the Companions key
+- assertion: completion.committed.len()==6 and report.acked==6
+- ✓ [test] `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `atomic_file::all_families_round_trip` in `23-persistence-failure-fixtures-v2.log`
+## save.hostile — BOUND (real-integration)
+- scenario: The Hostiles family snapshot (revision 9) commits through the real DiskStore in the six-family batch.
+- precondition: HostileMobsSave revision 9 remembered dirty; real temp root
+- expected: Committed and acked in the real six-family write
+- assertion: selected.len()==6 including SaveKey::Hostiles
+- assertion: report.acked==6 and in_flight 0 after ack
+- ✓ [test] `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `atomic_file::each_failure_complete_file` in `23-persistence-failure-fixtures-v2.log`
+## save.passive — BOUND (real-integration)
+- scenario: The Passives family snapshot (revision 9) commits through the real DiskStore in the six-family batch.
+- precondition: PassiveMobsSave revision 9 remembered dirty; real temp root
+- expected: Committed and acked in the real six-family write
+- assertion: selected.len()==6 including SaveKey::Passives
+- assertion: report.acked==6
+- ✓ [test] `integration::real_save_restart_round_trip_through_store` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `atomic_file::all_families_round_trip` in `23-persistence-failure-fixtures-v2.log`
+## save.player — BOUND (real-integration)
+- scenario: Full live path: a saved player logs in over the real Memory transport against the real store, plays PlayerInput+SelectHotbar through a real tick, projects the authoritative pose/inventory, submits the projection to the real store, and a reopened DiskStore loads the player save back.
+- precondition: Saved player (yaw 0.1/pitch 0.2) in a real fixture store; live chunk Ready with persisted_revision 9; MemoryTransport login handoff acknowledged
+- expected: Tick applies 2 commands; projected save carries pose, selected 5, hotbar/backpack/armor/health/hunger/respawn; completion committed equals submitted; reopened store loads the player family
+- assertion: publication.counters.commands==2 and last_applied_sequence==2
+- assertion: projected.current.position==position, hotbar.slots==slots[..9], backpack==slots[9..]
+- assertion: completion.committed == vec![(SaveKey::Player(player()), projected.revision)] and error None
+- assertion: reopened DiskStore::load(SaveKey::Player) returns LoadedValue::Player
+- ✓ [test] `actor_projection::actual_player_pose_and_inventory_projection_survive_disk_reopen` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `atomic_file::equal_revision_conflict` in `23-persistence-failure-fixtures-v2.log`
+## save.region — BOUND (provider)
+- scenario: Region-file crash safety: a child killed at each of the four fault points leaves the region readable with revision 7 or 8 and the payload matching the surviving revision; only BankSync requires the new revision.
+- precondition: Region with revision-7 chunk saved; child spawned via current_exe with MORNLEA_REGION_TEST_POINT; exit code 86 expected
+- expected: Each crash point: reopen succeeds, revision in {7,8}, chunk body matches the surviving save
+- assertion: child.status.code()==Some(86)
+- assertion: loaded.revision==7 or 8
+- assertion: new_required points assert revision==8
+- assertion: loaded.chunk matches the surviving save body
+- ✓ [test] `region_io::four_crash_points_old_or_new` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `region_io::generation_ties_and_overflow` in `23-persistence-failure-fixtures-v2.log`
+## save.world-metadata — BOUND (real-integration)
+- scenario: Background autosave plus final flush drive a real observed disk owner across three ticks; the reopened DiskStore loads the climate metadata exactly (world_time 1203, weather 97) and a restarted authority continues from it to 1204/96.
+- precondition: Real ObservedDisk under StoreMailbox background mode; AutosaveScheduler over AuthorityState with seeded metadata; three advance/poll/flush cycles; sync+close; reopen; restart
+- expected: Durable writes exactly [(rev2,1201),(3,1202),(4,1203)] with the last equal to the captured snapshot; reopened metadata exact; restarted first tick 1204/96
+- assertion: first.durable==1 and final_flush.durable==2 and outstanding==0
+- assertion: seen == vec![(2,1201),(3,1202),(4,1203)] and seen.last()==captured
+- assertion: restored == expected{world_time_ticks:1203, weather_ticks_remaining:97}
+- assertion: restarted first tick == expected{1204,96}
+- ✓ [test] `metadata_live::background_autosave_and_final_flush_resume_actual_climate_after_reopen` in `23-persistence-failure-fixtures-v2.log`
+- ✓ [test2] `atomic_file::metadata_same_time_new_weather` in `23-persistence-failure-fixtures-v2.log`
+## tick.phase.01.player-commands — BOUND (order-guard)
+- scenario: Source guard on the frozen reducer: the command-intake loop (admit_command) runs before the per-actor survival line and eating::run precedes player_motion::run, pinning the command phase ahead of physics.
+- precondition: Reducer source read from src/core/step.rs with comments/imports stripped; fn_body isolation of dispatch_rows
+- expected: Markers [admit_command, eating::run, player_motion::run] in strictly increasing source order inside dispatch_rows
+- assertion: chain_positions(body, &[admit_command, eating::run, player_motion::run]) completes without panic
+- ✓ [test] `phase_order::eating_before_motion` in `02-server-replay.log`
+## tick.phase.02.companion-actions — BOUND (order-guard)
+- scenario: Companion action phases bracket the interaction loop: companions::run precedes route_interaction, route_door, sleep::enter, sleep::settle, with exactly one deferred interaction loop and gate order world_mutation -> tools -> drops.
+- precondition: Reducer source as above; marker_count and chain_positions over the isolated dispatch_rows body
+- expected: Single deferred(RulePhase::Interaction) loop; the five-marker chain in order; route_door settles through world_mutation::run
+- assertion: marker_count(code, deferred(RulePhase::Interaction))==1
+- assertion: chain_positions(body, &[companions::run, route_interaction, route_door, sleep::enter, sleep::settle]) completes
+- assertion: chain_positions(route_interaction body, &[world_mutation::run, tools::run, drops::run]) completes
+- ✓ [test] `phase_order::deferred_interactions_keep_order` in `02-server-replay.log`
+## tick.phase.03.physics-advance — BOUND (order-guard)
+- scenario: Physics-advance ordering with a biting negative control: projectiles::run -> source_player_restore::recover -> PlayerPrePhysicsOxygen -> player_motion::run; swapping recovery with the oxygen phase must fail the chain probe.
+- precondition: Reducer source; swap_markers rewrites the two markers keeping both present
+- expected: The four-marker chain holds in the real source; the swapped variant panics in chain_positions
+- assertion: chain_positions(body, probe) completes on the real source
+- assertion: catch_unwind(chain_positions(swapped, probe)).is_err()
+- ✓ [test] `phase_order::recovery_precedes_oxygen_and_swapped_order_fails` in `02-server-replay.log`
+## tick.phase.04.hostile-advance — BOUND (order-guard)
+- scenario: Hostile-advance sandwich: hostile_outcomes::advance precedes projectiles::advance, then hostile_outcomes::run closes player deaths before passives::run.
+- precondition: Isolated dispatch_rows body of the reducer source
+- expected: The four markers appear in exactly that order
+- assertion: chain_positions(body, &[hostile_outcomes::advance, projectiles::advance, hostile_outcomes::run, passives::run]) completes
+- ✓ [test] `phase_order::combat_projectile_death_sandwich` in `02-server-replay.log`
+## tick.phase.05.block-updates — BOUND (order-guard)
+- scenario: Block-update phase closure guard: the random-block sweep closes the world row before containers::run and mining::run.
+- precondition: Isolated dispatch_rows body of the reducer source
+- expected: random_blocks::advance < containers::run < mining::run in source order
+- assertion: chain_positions(body, &[random_blocks::advance, containers::run, mining::run]) completes
+- ✓ [test] `phase_order::containers_before_mining_after_random` in `02-server-replay.log`
+- ✓ [test2] `phase_order::place_reaches_fluid_and_support_same_tick` in `02-server-replay.log`

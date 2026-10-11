@@ -1,0 +1,6 @@
+$ git grep -n -E 'Event::Chat\(|fn emit_chat' -- packages/engine/crates/mornlea_server/src/core/publication_project.rs packages/engine/crates/mornlea_server/src/core/step.rs
+# source commit: faede5650b213b04eb9d160e9816bdead0738fbd
+# started: 2026-10-08T12:04:50Z
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:471:    fn emit_chat(&mut self, _entities: &Entities, events: &mut Vec<RoutedEvent>) {
+packages/engine/crates/mornlea_server/src/core/publication_project.rs:485:            let event = Event::Chat(chat);
+# exit: 0

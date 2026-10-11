@@ -1,0 +1,18 @@
+{
+  "ai": {
+    "agentService": {
+      "endpoint": "http://127.0.0.1:8765",
+      "apiKeyEnv": "MORNLEA_CONFIG_PARITY_API_KEY"
+    },
+    "companions": [
+      {
+        "id": "3f2b8c1e-4a5d-4e6f-8a7b-9c0d1e2f3a4b",
+        "name": "小晨"
+      },
+      {
+        "id": "7d9e1f20-3b4c-4d5e-9f60-718293a4b5c6",
+        "name": "Tove"
+      }
+    ]
+  }
+}
