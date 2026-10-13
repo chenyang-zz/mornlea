@@ -408,7 +408,7 @@ def test_required_ci_workflow(repo_root: Path) -> None:
     """Verify production ci.yml matches all required CI workflow standards."""
     ci_file = repo_root / ".github" / "workflows" / "ci.yml"
     violations = required_workflow_violations(ci_file.read_text(encoding="utf-8"))
-    assert not violations, f"required CI workflow violations:\n" + "\n".join(violations)
+    assert not violations, "required CI workflow violations:\n" + "\n".join(violations)
 
 
 def test_required_ci_workflow_mutations(repo_root: Path) -> None:
@@ -1011,7 +1011,7 @@ def test_ci_doctor_profiles_and_failures(repo_root: Path, tmp_path: Path) -> Non
     """Verify doctor.sh validation profiles, failure diagnostics, and exit codes."""
     script = repo_root / "scripts" / "ci" / "doctor.sh"
     profiles = {
-        "preflight": ["bash", "git", "go", "gofmt", "node", "npx", "rg"],
+        "preflight": ["bash", "git", "go", "gofmt", "node", "npx", "python3", "rg", "uv"],
         "audit": ["bash", "python3", "uv", "rg"],
         "frontend": ["bash", "corepack", "git", "node"],
         "rust": ["bash", "cargo", "cc", "git", "go", "gofmt", "make", "python3", "rustc", "rustup", "uv"],
@@ -1043,7 +1043,12 @@ def test_ci_doctor_profiles_and_failures(repo_root: Path, tmp_path: Path) -> Non
     bin_dir = _ci_fixture_bin(tmp_path / "doc_order", ["bash", "git", "go", "gofmt", "node"])
     res = subprocess.run([str(script), "preflight"], cwd=repo_root, env=_ci_environment(str(bin_dir)), capture_output=True, text=True)
     assert res.returncode != 0
-    assert (res.stdout + res.stderr) == "missing required executable for preflight: npx\nmissing required executable for preflight: rg\n"
+    assert (res.stdout + res.stderr) == (
+        "missing required executable for preflight: npx\n"
+        "missing required executable for preflight: python3\n"
+        "missing required executable for preflight: rg\n"
+        "missing required executable for preflight: uv\n"
+    )
 
     # Unknown profile
     res = subprocess.run([str(script), "unknown"], cwd=repo_root, env=_ci_environment(str(bin_dir)), capture_output=True, text=True)

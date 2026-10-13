@@ -14,7 +14,7 @@ def get_repo_root() -> Path:
         raise RuntimeError("GOWORK is set to 'off': audit requires go.work workspace")
 
     # Traverse upward from current file's location
-    for parent in [Path(__file__).resolve().parent, *Path(__file__).resolve().parents]:
+    for parent in Path(__file__).resolve().parents:
         if (parent / "go.work").is_file():
             return parent
 

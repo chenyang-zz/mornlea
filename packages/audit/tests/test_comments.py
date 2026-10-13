@@ -10,6 +10,7 @@ from audit.comments import (
     collect_first_party_sources,
     comment_language_for_path,
     extract_comments,
+    python_string_end,
     scan_comment_language,
     scan_comment_task_ids,
 )
@@ -83,6 +84,7 @@ s = "string with # not a comment"
 t = """triple
 # not a comment
 """
+r = r"""raw triple with \\""" not a comment"""
 # Line comment
 x = 1 # Inline comment
 '''
@@ -91,9 +93,15 @@ x = 1 # Inline comment
     assert tokens[0].text == "# Header comment"
     assert tokens[0].line == 1
     assert tokens[1].text == "# Line comment"
-    assert tokens[1].line == 6
+    assert tokens[1].line == 7
     assert tokens[2].text == "# Inline comment"
-    assert tokens[2].line == 7
+    assert tokens[2].line == 8
+
+
+def test_python_string_end_raw_triple_quotes() -> None:
+    source = b'r"""hello\\"""world"""'
+    start = source.find(b'"""')
+    assert python_string_end(source, start, raw=True) == len(source)
 
 
 def test_extract_comments_gdscript() -> None:

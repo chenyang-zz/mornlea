@@ -10,7 +10,7 @@ profile=${1:-}
 [[ $# -eq 1 ]] || usage
 
 case "$profile" in
-preflight) required=(bash git go gofmt node npx rg) ;;
+preflight) required=(bash git go gofmt node npx python3 rg uv) ;;
 audit) required=(bash python3 uv rg) ;;
 frontend) required=(bash corepack git node) ;;
 rust) required=(bash cargo cc git go gofmt make python3 rustc rustup uv) ;;

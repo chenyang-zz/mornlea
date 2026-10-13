@@ -479,7 +479,7 @@ def python_string_end(source: bytes, start: int, raw: bool) -> int:
 
     idx = start + 3
     while idx + 2 < len(source):
-        if not raw and source[idx] == 0x5C:
+        if source[idx] == 0x5C:
             idx += 2
             continue
         if source[idx] == quote and source[idx + 1] == quote and source[idx + 2] == quote:
