@@ -1,6 +1,7 @@
 """Package dependency graph and architectural layer direction verification for Mornlea."""
 
 import json
+import os
 from pathlib import Path
 import re
 
@@ -306,30 +307,47 @@ def parse_go_file_imports(content: str) -> list[str]:
     return sorted(dict.fromkeys(normalized))
 
 
-def scan_sim_import_edges(repo_root: Path) -> dict[str, set[str]]:
-    """Scan simulation subtree on disk and return production internal imports for each subpackage."""
-    subtree = repo_root / "packages" / "server" / "sim"
+def scan_directory_production_imports(subtree: Path, repo_root: Path) -> dict[str, set[str]]:
+    """Recursively scan a subtree for directories containing production Go files.
+    
+    Returns a mapping from repository-relative slash path to the set of internal packages imported.
+    """
     edges: dict[str, set[str]] = {}
-    for sub in sorted(["contract", "entity", "realm", "runtime"]):
-        sub_dir = subtree / sub
-        if not sub_dir.is_dir():
+    if not subtree.is_dir():
+        return edges
+
+    for current_dir, _, files in os.walk(subtree):
+        dir_path = Path(current_dir)
+        prod_go_files = [
+            f for f in files
+            if f.endswith(".go") and not f.endswith("_test.go")
+        ]
+        if not prod_go_files:
             continue
-        pkg_key = f"packages/server/sim/{sub}"
+
+        rel_path = dir_path.relative_to(repo_root).as_posix()
         imports: set[str] = set()
-        for go_file in sub_dir.glob("*.go"):
-            if go_file.name.endswith("_test.go"):
-                continue
-            content = go_file.read_text(encoding="utf-8", errors="replace")
+        for filename in prod_go_files:
+            content = (dir_path / filename).read_text(encoding="utf-8", errors="replace")
             for imp in parse_go_file_imports(content):
-                # Filter for internal packages
-                if imp != imp.removeprefix("packages/"):
+                if imp.startswith("packages/"):
                     imports.add(imp)
-                elif f"packages/{imp}" in ALLOWED_DEPENDENCIES:
-                    imports.add(f"packages/{imp}")
-                elif imp in ALLOWED_DEPENDENCIES:
-                    imports.add(imp)
-        edges[pkg_key] = imports
+
+        edges[rel_path] = imports
+
     return edges
+
+
+def scan_sim_import_edges(repo_root: Path) -> dict[str, set[str]]:
+    """Scan simulation subtree on disk dynamically and return production internal imports for each subpackage."""
+    subtree = repo_root / "packages" / "server" / "sim"
+    return scan_directory_production_imports(subtree, repo_root)
+
+
+def scan_client_command_import_edges(repo_root: Path) -> dict[str, set[str]]:
+    """Scan client command subtree on disk dynamically and return production internal imports for each subpackage."""
+    subtree = repo_root / "packages" / "client" / "cmd" / "mornlea"
+    return scan_directory_production_imports(subtree, repo_root)
 
 
 def sim_dependency_violations(edges: dict[str, set[str] | list[str]]) -> list[str]:
@@ -490,7 +508,7 @@ def get_package_imports(repo_root: Path | None = None) -> dict[str, set[str]]:
 def verify_one_way_dependencies(
     repo_root: Path | None = None,
     package_imports: dict[str, set[str]] | None = None,
-    check_all_registered: bool | None = None,
+    check_all_registered: bool = True,
 ) -> list[str]:
     """Verify all internal package dependencies conform to ALLOWED_DEPENDENCIES and form a DAG.
     
@@ -508,10 +526,7 @@ def verify_one_way_dependencies(
         if pkg not in ALLOWED_DEPENDENCIES:
             violations.append(f"unregistered internal package: {pkg}")
 
-    # Check that registered packages exist in workspace when checking coverage
-    if check_all_registered is None:
-        check_all_registered = len(package_imports) >= len(ALLOWED_DEPENDENCIES)
-
+    # Check that registered packages exist in workspace when checking completeness
     if check_all_registered:
         workspace_mods: list[str] = []
         if repo_root is not None:

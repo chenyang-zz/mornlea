@@ -14,6 +14,7 @@ from audit.dependencies import (
     find_dependency_cycles,
     get_package_imports,
     parse_go_file_imports,
+    scan_client_command_import_edges,
     scan_sim_import_edges,
     sim_dependency_violations,
     validate_oracle_imports,
@@ -142,22 +143,7 @@ def test_sim_dependency_violations_detect_drift() -> None:
 
 def test_client_command_dependency_directions(repo_root: Path) -> None:
     """Verify client command subtree packages follow thin assembly and consumer interface rules."""
-    client_cmd_dir = repo_root / "packages" / "client" / "cmd" / "mornlea"
-    assert client_cmd_dir.is_dir()
-
-    edges: dict[str, set[str]] = {}
-    for sub in ["", "app", "benchmark", "capture", "devcapture"]:
-        sub_dir = client_cmd_dir / sub if sub else client_cmd_dir
-        pkg_key = f"packages/client/cmd/mornlea/{sub}" if sub else "packages/client/cmd/mornlea"
-        imports: set[str] = set()
-        for go_file in sub_dir.glob("*.go"):
-            if go_file.name.endswith("_test.go"):
-                continue
-            for imp in parse_go_file_imports(go_file.read_text(encoding="utf-8")):
-                if imp.startswith("packages/client/cmd/mornlea"):
-                    imports.add(imp)
-        edges[pkg_key] = imports
-
+    edges = scan_client_command_import_edges(repo_root)
     violations = client_command_dependency_violations(edges)
     assert not violations, f"Client command dependency violations:\n" + "\n".join(violations)
 
@@ -293,7 +279,7 @@ def test_verify_one_way_dependencies_detects_drift() -> None:
     # Package missing from ALLOWED_DEPENDENCIES
     mutated = dict(base)
     mutated["packages/unknown/pkg"] = set()
-    violations = verify_one_way_dependencies(package_imports=mutated)
+    violations = verify_one_way_dependencies(package_imports=mutated, check_all_registered=False)
     assert any("unregistered internal package" in v and "packages/unknown/pkg" in v for v in violations)
 
     # Forbidden dependency
@@ -301,7 +287,7 @@ def test_verify_one_way_dependencies_detects_drift() -> None:
         "packages/shared/core": {"packages/server/server"},
         "packages/shared/nativeabi": set(),
     }
-    violations = verify_one_way_dependencies(package_imports=mutated)
+    violations = verify_one_way_dependencies(package_imports=mutated, check_all_registered=False)
     assert any("packages/shared/core is not allowed to import packages/server/server" in v for v in violations)
 
     # Dependency cycle
@@ -311,5 +297,30 @@ def test_verify_one_way_dependencies_detects_drift() -> None:
     }
     cycles = find_dependency_cycles(cycle_graph)
     assert len(cycles) > 0
-    violations = verify_one_way_dependencies(package_imports=cycle_graph)
+    violations = verify_one_way_dependencies(package_imports=cycle_graph, check_all_registered=False)
     assert any("dependency cycle detected" in v for v in violations)
+
+
+def test_verify_one_way_dependencies_detects_missing_package() -> None:
+    """Verify missing registered workspace package is reported when check_all_registered is True."""
+    actual = {k: v for k, v in ALLOWED_DEPENDENCIES.items() if k != "packages/shared/core"}
+    violations = verify_one_way_dependencies(package_imports=actual, check_all_registered=True)
+    assert any("package packages/shared/core in allowed dependencies was not found in workspace" in v for v in violations)
+
+
+def test_scan_sim_import_edges_discovers_unexpected_subpackage(tmp_path: Path) -> None:
+    """Verify dynamic directory scanner discovers unexpected new packages containing production Go code."""
+    from audit.dependencies import scan_directory_production_imports
+
+    sim_root = tmp_path / "packages" / "server" / "sim"
+    extra_pkg = sim_root / "extra"
+    extra_pkg.mkdir(parents=True)
+    (extra_pkg / "extra.go").write_text("package extra\nimport _ \"github.com/channing771/mornlea/packages/shared/core\"\n", encoding="utf-8")
+
+    edges = scan_directory_production_imports(sim_root, tmp_path)
+    assert "packages/server/sim/extra" in edges
+    assert edges["packages/server/sim/extra"] == {"packages/shared/core"}
+
+    violations = sim_dependency_violations(edges)
+    assert any("unregistered simulation package: packages/server/sim/extra" in v for v in violations)
+
