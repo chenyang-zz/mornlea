@@ -11,7 +11,7 @@ profile=${1:-}
 
 case "$profile" in
 preflight) required=(bash git go gofmt node npx rg) ;;
-audit) required=(bash go gofmt rg) ;;
+audit) required=(bash python3 uv rg) ;;
 frontend) required=(bash corepack git node) ;;
 rust) required=(bash cargo cc git go gofmt make python3 rustc rustup uv) ;;
 go) required=(bash go gofmt) ;;

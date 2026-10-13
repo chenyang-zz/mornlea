@@ -32,7 +32,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -97,7 +96,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - name: Activate repository-pinned Rust toolchain
@@ -142,7 +140,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - name: Activate repository-pinned Rust toolchain
@@ -187,7 +184,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - name: Activate repository-pinned Rust toolchain
@@ -232,7 +228,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - name: Install policy dependencies
@@ -270,7 +265,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -304,7 +298,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - name: Install policy dependencies
@@ -342,7 +335,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -376,7 +368,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -420,7 +411,6 @@ jobs:
             packages/server/go.sum
             packages/client/go.sum
             packages/tools/go.sum
-            packages/audit/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5

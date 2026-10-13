@@ -212,7 +212,7 @@ test("does not repeat the focused identity guard after the full Go archcheck", (
     return { status: 0, stdout: "" };
   };
 
-  assert.deepEqual(stopFailures(["packages/audit/identity_test.go"], run, {}), []);
+  assert.deepEqual(stopFailures(["packages/shared/core/block.go", "go.work"], run, {}), []);
   assert.equal(
     calls.filter(
       ([command, argumentsList]) =>

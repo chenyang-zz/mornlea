@@ -7,7 +7,7 @@ fail() {
 }
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-expected_modules=$'packages/audit\npackages/client\npackages/contracts\npackages/server\npackages/shared\npackages/tools'
+expected_modules=$'packages/client\npackages/contracts\npackages/server\npackages/shared\npackages/tools'
 
 workspace_modules() {
 	go work edit -json |
@@ -65,7 +65,7 @@ server_packages() {
 
 rest_packages() {
 	local module
-	for module in packages/contracts packages/shared packages/tools packages/audit; do
+	for module in packages/contracts packages/shared packages/tools; do
 		list_module linux amd64 "$module" ./...
 	done | LC_ALL=C sort -u
 }

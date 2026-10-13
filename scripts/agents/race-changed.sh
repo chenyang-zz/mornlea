@@ -13,9 +13,7 @@
 #   3. 反向依赖闭包：沿 `go list` 的 .Imports 传递扩散；.TestImports/.XTestImports
 #      只作一层直接依赖（测试对被测包的依赖），不沿测试边继续传递——否则触碰
 #      packages/shared/core 这类底座包时闭包近似全仓，工具就失去意义；残余风险由
-#      T3 全量门禁与 CI 兜底。
-#   4. 恒含 packages/audit（依赖边界/基线版本/文档一致守卫，秒级）。
-#   5. 闭包触及 cdylib 消费包（nativeabi/core/physics/mesh/client/sim/server/
+#   4. 闭包触及 cdylib 消费包（nativeabi/core/physics/mesh/client/sim/server/
 #      cmd/mornlea、其 app/capture/benchmark 子包与 cmd/mornlea-server；其中
 #      nativeabi/core/physics 在 packages/shared，sim/server 与 cmd/mornlea-server
 #      在 packages/server，mesh/client 与 cmd/mornlea 族在 packages/client）时
@@ -60,9 +58,9 @@ if [ -z "$changed_files" ]; then
 fi
 
 # 文件 → 包：go list 一次给出全部包目录与导入路径。根模块已解散、`./...` 在
-# 仓库根不可用，且 go.work 下模式不跨模块：shared、server、client、tools、
-# audit 与 contracts 六个模块必须显式列出，否则其改动映射不到包。
-WORKSPACE_PACKAGES="./packages/contracts/... ./packages/shared/... ./packages/server/... ./packages/client/... ./packages/tools/... ./packages/audit/..."
+# 仓库根不可用，且 go.work 下模式不跨模块：shared、server、client、tools
+# 与 contracts 五个模块必须显式列出，否则其改动映射不到包。
+WORKSPACE_PACKAGES="./packages/contracts/... ./packages/shared/... ./packages/server/... ./packages/client/... ./packages/tools/..."
 pkg_map="$(go list -f '{{.Dir}}|{{.ImportPath}}' ${WORKSPACE_PACKAGES})"
 changed_pkgs="$(printf '%s\n' "$changed_files" | while read -r f; do
   dir="$(dirname "$f")"
@@ -109,12 +107,9 @@ test_dependents="$(printf '%s\n' "$changed_pkgs" | while read -r p; do
   }'
 done | sort -u)"
 closure="$(printf '%s\n%s\n' "$closure" "$test_dependents" | sort -u | grep -v '^$')"
-# 恒含 packages/audit：依赖边界、基线版本与文档一致守卫，秒级成本。
-closure="$(printf '%s\n%s\n' "$closure" "github.com/channing771/mornlea/packages/audit" | sort -u)"
-
 echo "基线 ${BASE}；改动包："
 printf '  %s\n' "$changed_pkgs"
-echo "反向依赖闭包（含 packages/audit）："
+echo "反向依赖闭包："
 printf '  %s\n' "$closure"
 
 if [ "$DIFF_ONLY" = 1 ]; then

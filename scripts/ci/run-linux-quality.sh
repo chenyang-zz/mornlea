@@ -34,4 +34,4 @@ done
 ((${#packages[@]} > 0)) || fail 'supported package inventory is empty'
 go test "${packages[@]}" -run '^$' -count=1
 go vet "${packages[@]}"
-go test ./packages/audit ./packages/server/storage/... ./packages/shared/network/... ./packages/shared/physics -v
+go test ./packages/server/storage/... ./packages/shared/network/... ./packages/shared/physics -v

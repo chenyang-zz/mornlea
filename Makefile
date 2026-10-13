@@ -2,6 +2,7 @@
 
 GO := go
 CARGO ?= rustup run 1.97.1 cargo
+export PATH := $(CURDIR)/packages/audit/.venv/bin:$(PATH)
 # 默认目标目录隔离到当前 worktree；显式 CARGO_TARGET_DIR 仍可覆盖。
 export CARGO_TARGET_DIR ?= $(CURDIR)/packages/engine/target/cargo
 RUST_DIR := packages/engine
@@ -26,7 +27,7 @@ CI_VALIDATE_CANDIDATE_SHA = bash -c '[[ "$$CI_CANDIDATE_SHA" =~ ^([0-9a-f]{40}|[
 
 # go.work 下 `go test ./...` 不跨嵌套模块；全部按模块枚举的入口（test 族、
 # dev-check、vet）显式循环该列表，防止新模块成为 ./... 盲区。
-GO_TEST_MODULES := ./packages/contracts ./packages/shared ./packages/server ./packages/client ./packages/tools ./packages/audit
+GO_TEST_MODULES := ./packages/contracts ./packages/shared ./packages/server ./packages/client ./packages/tools
 
 .PHONY: help run build build-linux-server test test-race test-race-short test-race-changed test-multiplayer bench-multiplayer archcheck comment-language-check ci-preflight fmt clean visual-check visual-update rust rust-check frontend-check frontend-visual-check frontend-visual-update dev-check companion-agent-check companion-agent-integration agent-planner agent-implementer agent-gates agent-dashboard agent-ui-dev godot-build godot-export-linux godot-check godot-asset-check godot-project-check godot-python-check godot-input-check godot-camera-check godot-target-check godot-entity-check godot-environment-check godot-hud-check godot-disconnect-check godot-smoke godot-terrain-check godot-capability-check godot-playable-smoke godot-visual-evidence godot-visual-compare godot-benchmark
 .PHONY: ci-rust-quality ci-frontend ci-native-linux ci-native-macos ci-verify-linux-artifact ci-verify-macos-artifact ci-linux-quality ci-race-server ci-race-rest ci-race-client ci-integration-server ci-integration-client
@@ -41,11 +42,11 @@ help:
 		'  make run              运行游戏，可通过 ARGS 传递参数' \
 		'  make build            构建 bin/mornlea、bin/mornlea-server 与同目录 Rust dylib' \
 		'  make build-linux-server 构建 Linux amd64 专服与同目录 Rust .so' \
-		'  make test             运行全部测试(按 go.work 六模块逐一循环)' \
-		'  make test-race        使用 race detector 运行全部测试(六模块循环,语义与单模块仓库一致)' \
-		'  make test-race-short   race detector 快速冒烟(六模块循环 + `-short` 跳过重型测试)' \
+		'  make test             运行全部测试(按 go.work 五模块逐一循环)' \
+		'  make test-race        使用 race detector 运行全部测试(五模块循环,语义与单模块仓库一致)' \
+		'  make test-race-short   race detector 快速冒烟(五模块循环 + `-short` 跳过重型测试)' \
 		'  make test-race-changed 只对改动包及其反向依赖跑 race(T1 层;RACE_BASE=ref 换基线)' \
-		'  make dev-check        迭代期快检:gofmt/六模块 vet+短测试与 Rust 静态检查' \
+		'  make dev-check        迭代期快检:gofmt/五模块 vet+短测试与 Rust 静态检查' \
 		'  make ci-preflight     运行平台无关的 CI 前置检查与包分区验证' \
 		'  make ci-rust-quality  Run pinned Rust formatting, lint, and unit gates' \
 		'  make ci-frontend      Run the frozen frontend dependency and validation gates' \
@@ -181,11 +182,11 @@ bench-multiplayer:
 		-bench '(RemotePlayerStateCodec|EightPlayerInterest|RemoteAvatarNameTag)' -benchmem -count=3
 
 archcheck:
-	$(GO) test ./packages/audit -count=1
+	uv run pytest packages/audit
 	test -z "$$($(GO) list -deps $(SERVER) | rg 'packages/client/(client|mesh|render)|gfxspike|glfw|webgpu|x/image/font')"
 
 comment-language-check:
-	$(GO) test ./packages/audit -run 'EnglishCommentMigration|CodeCommentLanguage|CommentScanner' -count=1
+	uv run pytest packages/audit/tests/test_comments.py
 
 ci-preflight:
 	scripts/ci/doctor.sh preflight
@@ -194,7 +195,7 @@ ci-preflight:
 	node --test scripts/agent-hooks/guard.test.mjs
 	$(MAKE) comment-language-check
 	scripts/ci/package-inventory.sh --check
-	$(GO) test ./packages/audit -skip '^TestGodotAssetSyncIsDeterministicAndRejectsManualFiles$$' -count=1
+	uv run pytest packages/audit
 
 ci-rust-quality:
 	scripts/ci/doctor.sh rust

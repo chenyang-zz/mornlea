@@ -48,7 +48,6 @@ CI_GO_CACHE = """packages/shared/go.sum
 packages/server/go.sum
 packages/client/go.sum
 packages/tools/go.sum
-packages/audit/go.sum
 packages/engine/include/mornlea_engine.h
 packages/engine/include/mornlea_client.h"""
 
@@ -700,7 +699,7 @@ def test_ci_integration_ordered_commands_and_failures(repo_root: Path, tmp_path:
         ("client", [
             "go\ttest\t./packages/client/cmd/mornlea/benchmark\t-run\t^TestScenarioV7EightSessionServerProbeIsRealAndBounded$\t-count=1",
             "go\ttest\t./packages/client/client\t./packages/server/server\t./packages/client/cmd/mornlea/benchmark\t./packages/tools/perfcheck\t-run\tTest(PerfReportV6|ScenarioV6|PerfcheckV6|PerfcheckV5SameScenario|PerformanceThresholds|InterestObserver|HostStats|BenchmarkServerEpoch|BenchmarkServerMeasuredWindow)\t-count=1",
-            "go\ttest\t./packages/contracts/...\t./packages/shared/...\t./packages/server/...\t./packages/client/...\t./packages/tools/...\t./packages/audit/...\t-bench=.\t-benchtime=1x\t-run=^$",
+            "go\ttest\t./packages/contracts/...\t./packages/shared/...\t./packages/server/...\t./packages/client/...\t./packages/tools/...\t-bench=.\t-benchtime=1x\t-run=^$",
             "go\ttest\t./packages/shared/network\t./packages/server/server\t./packages/client/render\t-run\t^$\t-bench\t(RemotePlayerStateCodec|EightPlayerInterest|RemoteAvatarNameTag)\t-benchmem\t-benchtime=100x\t-count=1",
         ]),
     ]
@@ -861,7 +860,7 @@ def test_ci_linux_quality_ordered_commands_and_failures(repo_root: Path, tmp_pat
             "doctor\taudit",
             f"go\ttest\t{prefix}audit\t{prefix}tools/perfcheck\t-run\t^$\t-count=1",
             f"go\tvet\t{prefix}audit\t{prefix}tools/perfcheck",
-            "go\ttest\t./packages/audit\t./packages/server/storage/...\t./packages/shared/network/...\t./packages/shared/physics\t-v",
+            "go\ttest\t./packages/server/storage/...\t./packages/shared/network/...\t./packages/shared/physics\t-v",
         ]
         if mode in ("inventory-error", "empty"):
             want = want[:1]
@@ -884,7 +883,7 @@ def test_ci_audit_entrypoints_reject_missing_ripgrep_before_work(repo_root: Path
         called = fixture_root / "inventory-called"
         _write_executable(fixture_root / "scripts" / "ci" / "package-inventory.sh", '#!/usr/bin/env bash\nprintf called > "$CI_TEST_CALLED"\n')
 
-        bin_dir = _ci_fixture_bin(fixture_root, ["bash", "go", "gofmt"])
+        bin_dir = _ci_fixture_bin(fixture_root, ["bash", "go", "gofmt", "python3", "uv"])
         dirname_path = shutil.which("dirname")
         assert dirname_path
         (bin_dir / "dirname").symlink_to(dirname_path)
@@ -1013,7 +1012,7 @@ def test_ci_doctor_profiles_and_failures(repo_root: Path, tmp_path: Path) -> Non
     script = repo_root / "scripts" / "ci" / "doctor.sh"
     profiles = {
         "preflight": ["bash", "git", "go", "gofmt", "node", "npx", "rg"],
-        "audit": ["bash", "go", "gofmt", "rg"],
+        "audit": ["bash", "python3", "uv", "rg"],
         "frontend": ["bash", "corepack", "git", "node"],
         "rust": ["bash", "cargo", "cc", "git", "go", "gofmt", "make", "python3", "rustc", "rustup", "uv"],
         "go": ["bash", "go", "gofmt"],
@@ -1137,7 +1136,7 @@ def test_ci_package_inventory_rejects_unexpected_workspace_path_and_load_errors(
     bin_space = tmp_path / "bin_space"
     fake_go_space = f"""#!/usr/bin/env bash
 if [[ "${{1:-}}" == work && "${{2:-}}" == edit ]]; then
-\tprintf '%s\\n' '{{' '  "Use": [' '    {{' '      "DiskPath": "./packages/audit"' '    }},' '    {{' '      "DiskPath": "./packages/client"' '    }},' '    {{' '      "DiskPath": "./packages/contracts"' '    }},' '    {{' '      "DiskPath": "./packages/server"' '    }},' '    {{' '      "DiskPath": "./packages/shared"' '    }},' '    {{' '      "DiskPath": "./packages/tools"' '    }},' '    {{' '      "DiskPath": "./packages/extra path"' '    }}' '  ]' '}}'
+\tprintf '%s\\n' '{{' '  "Use": [' '    {{' '      "DiskPath": "./packages/client"' '    }},' '    {{' '      "DiskPath": "./packages/contracts"' '    }},' '    {{' '      "DiskPath": "./packages/server"' '    }},' '    {{' '      "DiskPath": "./packages/shared"' '    }},' '    {{' '      "DiskPath": "./packages/tools"' '    }},' '    {{' '      "DiskPath": "./packages/extra path"' '    }}' '  ]' '}}'
 \texit 0
 fi
 exec "{real_go}" "$@"
@@ -1238,7 +1237,7 @@ exec "{real_go}" "$@"
 
     want = []
     for platform in ["linux/amd64", "darwin/arm64"]:
-        for module in ["packages/audit", "packages/client", "packages/contracts", "packages/server", "packages/shared", "packages/tools"]:
+        for module in ["packages/client", "packages/contracts", "packages/server", "packages/shared", "packages/tools"]:
             want.append(f"{platform} {module}")
     want.sort()
 
@@ -1265,7 +1264,7 @@ exec "{real_go}" "$@"
     cases = [
         ("client skips bounded server probe", "client", "github.com/channing771/mornlea/packages/tools/gfxspike", ["-race", "-p=1", "-skip", "^TestScenarioV7EightSessionServerProbeIsRealAndBounded$"]),
         ("server has no client skip", "server", "github.com/channing771/mornlea/packages/server/server", ["-race", "-p=1"]),
-        ("rest has no client skip", "rest", "github.com/channing771/mornlea/packages/audit", ["-race", "-p=1"]),
+        ("rest has no client skip", "rest", "github.com/channing771/mornlea/packages/shared/nativeabi", ["-race", "-p=1"]),
     ]
 
     for name, slice_name, want_pkg, want_tail in cases:
@@ -1391,7 +1390,7 @@ def test_ci_preflight_recipe_order_and_boundary(repo_root: Path) -> None:
         "node --test scripts/agent-hooks/guard.test.mjs",
         "$(MAKE) comment-language-check",
         "scripts/ci/package-inventory.sh --check",
-        "$(GO) test ./packages/audit -skip '^TestGodotAssetSyncIsDeterministicAndRejectsManualFiles$$' -count=1",
+        "uv run pytest packages/audit",
     ]
 
     last = -1
@@ -1404,7 +1403,7 @@ def test_ci_preflight_recipe_order_and_boundary(repo_root: Path) -> None:
     audit_cmd = ordered[-1]
     audit_invocations = 0
     for line in recipe.splitlines():
-        if line.strip().startswith("$(GO) test ./packages/audit "):
+        if line.strip().startswith("uv run pytest packages/audit"):
             audit_invocations += 1
             assert line.strip() == audit_cmd
     assert audit_invocations == 1
