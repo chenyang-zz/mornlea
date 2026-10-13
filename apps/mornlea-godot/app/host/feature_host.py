@@ -968,6 +968,7 @@ class feature_host(Node):
     _last_process_ns: int
     _last_apply_ns: int
     _last_allocation_delta: int
+    _last_rust_failure: str
     _rust_mode: bool
     _rust_retiring: bool
     _rust_token: dict[str, object] | None
@@ -985,6 +986,7 @@ class feature_host(Node):
         self._last_process_ns = 0
         self._last_apply_ns = 0
         self._last_allocation_delta = 0
+        self._last_rust_failure = ""
         # Rust-mode session ownership starts absent: the pilot path stays the
         # default and only an explicit rust activation arms this state.
         self._rust_mode = False
@@ -1065,6 +1067,10 @@ class feature_host(Node):
 
     def last_allocation_delta(self) -> int:
         return self._last_allocation_delta
+
+    def last_rust_failure(self) -> str:
+        """Report the latest bounded refusal without retaining failure history."""
+        return self._last_rust_failure
 
     def plan_catalog(self, catalog_path: str, bridge_path: str) -> str:
         bridge = self.get_node(bridge_path)
@@ -1882,6 +1888,33 @@ def _rust_step_from(result: object, epoch: str) -> dict[str, object] | None:
     return report if _rust_terminal(report["terminal"]) else None
 
 
+def _rust_publication_failure(result: object) -> str:
+    """Preserve closed facade classes while malformed successes remain invalid input."""
+    if isinstance(result, dict) and _exact_fields(result, ("ok", "value", "error")):
+        if result["ok"] is True and result["error"] is None:
+            return "InvalidInput"
+        if (
+            result["ok"] is False
+            and result["value"] is None
+            and isinstance(result["error"], dict)
+            and _exact_fields(result["error"], ("class", "resource", "limit", "observed"))
+        ):
+            error_class = _rust_error_class(result)
+            if error_class in (
+                "InvalidInput",
+                "IncompatibleVersion",
+                "InvalidState",
+                "StaleEpoch",
+                "Capacity",
+                "Timeout",
+                "Disconnected",
+                "Io",
+                "Internal",
+            ):
+                return error_class
+    return "UnknownError"
+
+
 def _rust_dispatch(host: feature_host) -> int:
     """One host-owned facade step, pull, validation, and same-frame fan-out.
 
@@ -1899,18 +1932,22 @@ def _rust_dispatch(host: feature_host) -> int:
     work = {"messages": RUST_STEP_MESSAGE_BUDGET, "meshes": RUST_STEP_MESH_BUDGET}
     step_result = _call_rust(bridge, "step", token, epoch, work)
     if _rust_step_from(step_result, epoch) is None:
+        host._last_rust_failure = f"step:{_rust_publication_failure(step_result)}"
         return 0
     pull_result = _call_rust(bridge, "pull_typed_frame", token, epoch)
     frame = _rust_frame_from(
         pull_result, epoch, host._rust_families, host._rust_required, host._rust_frame
     )
     if frame is None:
+        host._last_rust_failure = f"pull_typed_frame:{_rust_publication_failure(pull_result)}"
         return 0
     try:
         native_frame = _rust_values((frame,), True)[0]
     except TypeError, ValueError, OverflowError, RuntimeError:
+        host._last_rust_failure = "frame:InvalidInput"
         return 0
     host._rust_frame = frame
+    host._last_rust_failure = ""
     apply_started = time.perf_counter_ns()
     for feature_id in host._active_order:
         instance = host._instances.get(feature_id)
@@ -1985,6 +2022,7 @@ def _activate_rust(
         # closed the core token through `_deactivate`.
         return result
     host._rust_required = _required_families(manifests, host._active_order)
+    host._last_rust_failure = ""
     return result
 
 
@@ -2008,6 +2046,7 @@ def _reset_rust(host: feature_host, epoch: int) -> None:
         # untouched rather than splitting features from their session epoch.
         return
     host._rust_epoch = fresh
+    host._last_rust_failure = ""
     # Frames of the retired epoch are stale by contract; the retained copy is
     # dropped so only a validated frame of the fresh epoch can reappear.
     host._rust_frame = None

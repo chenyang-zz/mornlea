@@ -191,7 +191,8 @@
     "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
     "mornlea_client_core::session_replay::live::retained_confirmations_share_input_admission_capacity",
     "mornlea_client_core::session_replay::live::confirmations_and_rejections_share_capacity_before_owner_mutation",
-    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm"
+    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -355,7 +356,17 @@
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
     "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+    "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose"
    ]
   },
   {
@@ -399,7 +410,10 @@
     "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
     "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
     "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
-    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -555,7 +569,10 @@
     "mornlea_client_core::presentation_contract::world_ui::derived_prompt_merges_after_confirmed_without_invented_event",
     "mornlea_client_core::session_replay::live::live_prompt_uses_loaded_block_and_clears_when_forgotten",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -1358,7 +1375,10 @@
     "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
-    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -1443,7 +1463,9 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -1464,7 +1486,8 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -1485,7 +1508,9 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
    ]
   },
   {
@@ -1532,7 +1557,9 @@
     "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
     "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -1678,7 +1705,9 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -1700,7 +1729,9 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
    ]
   },
   {
@@ -1722,7 +1753,8 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -1790,7 +1822,10 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+    "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically"
    ]
   },
   {
@@ -1812,7 +1847,12 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks"
    ]
   },
   {
@@ -1834,7 +1874,8 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -1880,7 +1921,9 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -1902,7 +1945,10 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
    ]
   },
   {
@@ -1924,7 +1970,8 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -1946,7 +1993,9 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -1968,7 +2017,10 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
    ]
   },
   {
@@ -1990,7 +2042,8 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   }
  ],
@@ -6522,7 +6575,9 @@
    "rust_tests": [
     "mornlea_client_core::presentation_contract::actors_hostile::yaw_only_spawn_carries_health_without_pitch",
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
-    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses"
+    "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -6539,7 +6594,9 @@
    "rust_tests": [
     "mornlea_client_core::presentation_contract::actors_passive::spawn_projects_health_pose_and_typed_identity",
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
-    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons"
+    "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -6556,7 +6613,9 @@
    "rust_tests": [
     "mornlea_client_core::presentation_contract::actors_projectile::launch_carries_position_velocity_and_archetype_exactly",
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
-    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output"
+    "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -6573,7 +6632,9 @@
    "rust_tests": [
     "mornlea_client_core::presentation_contract::actors_companion::spawn_projects_typed_identity_name_pose_and_pitch",
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
-    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension"
+    "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -6591,7 +6652,9 @@
    "rust_tests": [
     "mornlea_client_core::presentation_contract::actors_drop::upsert_carries_raw_identity_stack_and_exact_position",
     "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
-    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity"
+    "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -7048,7 +7111,8 @@
     "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
     "mornlea_client_core::session_replay::live::retained_confirmations_share_input_admission_capacity",
     "mornlea_client_core::session_replay::live::confirmations_and_rejections_share_capacity_before_owner_mutation",
-    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm"
+    "mornlea_client_core::session_replay::live::rejected_backward_and_unissued_sources_never_confirm",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -7149,7 +7213,17 @@
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
     "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+    "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose"
    ]
   },
   {
@@ -7175,7 +7249,10 @@
     "mornlea_client_core::presentation_contract::player_view::confirmed_pose_stays_authoritative_while_prediction_is_explicit",
     "mornlea_client_core::presentation_contract::player_view::acknowledged_correction_publishes_reason_and_sequence",
     "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
-    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance"
+    "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -7265,7 +7342,10 @@
     "mornlea_client_core::presentation_contract::world_ui::derived_prompt_merges_after_confirmed_without_invented_event",
     "mornlea_client_core::session_replay::live::live_prompt_uses_loaded_block_and_clears_when_forgotten",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -7987,7 +8067,10 @@
     "mornlea_godot::rust_server_integration::actual_memory_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_godot::rust_server_integration::actual_tcp_correction_replays_pending_input_and_keeps_audio_provenance",
     "mornlea_client_core::session_replay::live::real_acknowledgment_publishes_exact_receipts_once_without_confirming_chat",
-    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source"
+    "mornlea_client_core::presentation_contract::frame::confirmed_input_requires_a_consumed_correlated_authority_source",
+    "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
    ]
   },
   {
@@ -8065,7 +8148,9 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -8086,7 +8171,8 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -8107,7 +8193,9 @@
     "mornlea_client_core::presentation_contract::actors_remote::spawn_projects_typed_identity_name_and_actual_dimension",
     "mornlea_client_core::presentation_contract::actors_remote::spawn_state_remove_reuse_lifecycle",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
    ]
   },
   {
@@ -8151,7 +8239,9 @@
     "mornlea_client_core::presentation_contract::actors_drop::upsert_extreme_geometry_is_exact",
     "mornlea_client_core::presentation_contract::actors_drop::remove_publishes_identity_only_and_reuse_keeps_identity",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -8285,7 +8375,9 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -8307,7 +8399,9 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
    ]
   },
   {
@@ -8329,7 +8423,8 @@
     "mornlea_client_core::presentation_contract::actors_companion::states_batch_keeps_packet_order_pose_and_reset",
     "mornlea_client_core::presentation_contract::actors_companion::despawn_is_remove_only_with_resolved_dimension",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -8394,7 +8489,10 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+    "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically"
    ]
   },
   {
@@ -8416,7 +8514,12 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+    "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose",
+    "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks"
    ]
   },
   {
@@ -8438,7 +8541,8 @@
     "mornlea_client_core::presentation_contract::actors_hostile::state_batch_advances_health_velocity_and_position_together",
     "mornlea_client_core::presentation_contract::actors_hostile::old_epoch_rejects_and_removed_identity_reuses",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -8481,7 +8585,9 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -8503,7 +8609,10 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
    ]
   },
   {
@@ -8525,7 +8634,8 @@
     "mornlea_client_core::presentation_contract::actors_passive::state_batch_keeps_packet_order_graze_and_resolved_dimension",
     "mornlea_client_core::presentation_contract::actors_passive::despawn_publishes_exact_vanished_and_died_reasons",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   },
   {
@@ -8547,7 +8657,9 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+    "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
    ]
   },
   {
@@ -8569,7 +8681,10 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_transcript_populates_all_ten_families",
-    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families"
+    "mornlea_godot::rust_server_integration::actual_tcp_transcript_populates_all_ten_families",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+    "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+    "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
    ]
   },
   {
@@ -8591,7 +8706,8 @@
     "mornlea_client_core::presentation_contract::actors_projectile::state_updates_carry_position_only_without_velocity_re_attribution",
     "mornlea_client_core::presentation_contract::actors_projectile::old_epoch_rejects_whole_projection_without_partial_output",
     "mornlea_godot::rust_server_integration::actual_memory_all_actor_removals_and_terrain_forget",
-    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget"
+    "mornlea_godot::rust_server_integration::actual_tcp_all_actor_removals_and_terrain_forget",
+    "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
    ]
   }
  ],

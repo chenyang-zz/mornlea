@@ -395,10 +395,27 @@ fn bounds_admit_maxima_and_zeros_and_reject_plus_one() {
     let zeros = survival(0, 0, 0, true, 0);
     let mut provider = admitted_mirror(EPOCH);
     commit(&mut provider, player_event(7, maxima));
-    commit(&mut provider, player_event(0, zeros));
+    // Pure reader evidence: repeated or backward player ticks are not admitted by ingress.
+    let mut observations = provider.observations().to_vec();
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(2), 0)
+                .unwrap(),
+            Some(0),
+            packet(player_event(0, zeros)),
+            Vec::new(),
+        )
+        .unwrap(),
+    );
 
     let fixture = view_fixture();
-    let records = project_survival(&fixture.view_of(&provider)).expect("the bounds project");
+    let records = project_survival(&fixture.view(
+        provider.mirror(),
+        &observations,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(3),
+    ))
+    .expect("the bounds project");
     assert_eq!(records.len(), 2);
     let full = survival_view(&records[0]);
     assert_eq!(full, maxima);

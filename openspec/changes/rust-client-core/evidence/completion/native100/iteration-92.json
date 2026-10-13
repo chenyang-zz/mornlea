@@ -1,0 +1,1 @@
+{"contract_sha": "53c88b42016db0da0d1459799c6b301a4e7232a7c4bbe4a8c85afdf4d6f415b1", "families": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "inputs": 1, "ok": true, "preparation": true, "reconnects": 1, "release_order": true, "resets": 1, "retained_frame": true, "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268"}

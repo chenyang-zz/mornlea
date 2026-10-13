@@ -2,7 +2,7 @@
 doc_id: godot-client-project
 language: en
 counterpart: README.zh.md
-revision: 2026-09-30.1
+revision: 2026-10-13.1
 ---
 
 # Mornlea Godot Client
@@ -128,13 +128,15 @@ scripts/godot/terrain-smoke.sh
 
 ## Architecture boundary
 
-Godot owns desktop windowing, keyboard/mouse collection, presentation, pilot UI, and Godot resource lifecycles. The Go client runtime will continue to own protocol v44, mirrors, prediction, semantic frame state, and bounded network processing. Numerical mesh, lighting, collision, raycast, and physics remain in engine ABI v11. The authoritative Go server remains the only owner of world and player truth.
+Godot owns desktop windowing, keyboard/mouse collection, presentation, pilot UI, and Godot resource lifecycles. The current default Go client and the separately selectable accepted Rust core each own their protocol v45 session, mirrors, prediction, semantic frame state and bounded network processing when selected. Numerical mesh, lighting, collision, raycast, and physics remain in engine ABI v11. The authoritative Go server remains the only owner of world and player truth.
 
 Future functionality extends the same root through coarse `features/`, `platform/desktop/`, `config/`, and the single `addons/mornlea_bridge/` boundary. Bootstrap must remain feature-agnostic. Mobile, Web, console, touch, sensors, and mobile lifecycle support are outside this project.
 
 Generated editor cache and native bridge binaries are ignored. Script and shader `.uid` sidecars are intentionally tracked once Godot generates them.
 
 ## Rust core qualification
+
+[F3 completion evidence](../../openspec/changes/rust-client-core/completion-handoff.md) records accepted source `2cea2020091168ea5a6845517bc49ccbdbae0268`, actual Memory/TCP integration, 100 native session processes and the complete Darwin arm64 Python/export matrix. The production default cutover remains a separate P14 gate.
 
 The Rust session host is exercised through an explicit test catalog. On the
 qualified Darwin arm64 environment, with headless runtime execution authorized:

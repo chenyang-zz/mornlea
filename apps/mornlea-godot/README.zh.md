@@ -2,7 +2,7 @@
 doc_id: godot-client-project
 language: zh
 counterpart: README.md
-revision: 2026-09-30.1
+revision: 2026-10-13.1
 ---
 
 # Mornlea Godot 客户端
@@ -128,13 +128,15 @@ scripts/godot/terrain-smoke.sh
 
 ## 架构边界
 
-Godot 只负责桌面窗口、键盘鼠标采集、呈现、试点 UI 与 Godot 资源生命周期。Go 客户端运行时继续负责协议 v44、镜像、预测、语义帧状态与有界网络处理。网格、光照、碰撞、射线检测和物理由 engine ABI v11 中的数值实现继续负责。权威 Go 服务器仍是世界与玩家真值的唯一所有者。
+Godot 只负责桌面窗口、键盘鼠标采集、呈现、试点 UI 与 Godot 资源生命周期。当前默认 Go 客户端与可单独选择的已验收 Rust 核心，分别在被选中时拥有协议 v45 会话、镜像、预测、语义帧状态与有界网络处理。网格、光照、碰撞、射线检测和物理由 engine ABI v11 中的数值实现继续负责。权威 Go 服务器仍是世界与玩家真值的唯一所有者。
 
 未来功能通过同一根目录中的粗粒度 `features/`、`platform/desktop/`、`config/` 与唯一 `addons/mornlea_bridge/` 边界扩展。Bootstrap 必须保持与具体功能无关。移动端、Web、主机、触摸、传感器和移动生命周期支持均不属于本项目范围。
 
 编辑器缓存和原生桥接二进制会被忽略；Godot 生成脚本与着色器 `.uid` 伴随文件后应纳入版本控制。
 
 ## Rust 核心验证
+
+[F3 完成证据](../../openspec/changes/rust-client-core/completion-handoff.md) 记录已接受源码 `2cea2020091168ea5a6845517bc49ccbdbae0268`、真实 Memory/TCP 集成、100 次原生会话进程和完整 Darwin arm64 Python/导出矩阵。生产默认切换仍是独立的 P14 门禁。
 
 在已验证的 Darwin arm64 环境中，授权无窗口运行后执行：
 

@@ -930,6 +930,75 @@ class RustFeatureHostTest(unittest.TestCase):
         self.host._process(1 / 60)
         self.assertEqual(len(self.active_feature("consumer").frames), 2)
 
+    def test_publication_failures_report_bounded_status_and_clear_on_recovery(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("reported-failure", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(1 / 60)
+        previous = self.host._rust_frame
+        self.assertEqual(self.host.last_rust_failure(), "")
+        for method in ("step", "pull_typed_frame"):
+            self.bridge.refused.add(method)
+            for _ in range(3):
+                self.host._process(1 / 60)
+                self.assertEqual(self.host.last_rust_failure(), f"{method}:InvalidState")
+                self.assert_retains_last_frame_and_resources(("consumer",), previous)
+            self.bridge.refused.remove(method)
+        self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "")
+        self.assertEqual(len(self.active_feature("consumer").frames), 2)
+
+    def test_invalid_publications_report_status_without_retaining_arbitrary_text(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("invalid-status", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(1 / 60)
+        previous = self.host._rust_frame
+        saved_step = self.bridge.step_value
+        self.bridge.step_value = {"broken": True}
+        self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "step:InvalidInput")
+        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+        self.bridge.step_value = saved_step
+        self.bridge.frame_value = {"broken": True}
+        self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "pull_typed_frame:InvalidInput")
+        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+        with patch.object(HOST, "_call_rust", return_value=error_envelope("x" * 1024)):
+            self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "step:UnknownError")
+        malformed = {"ok": False, "value": None, "error": {"class": "Internal"}}
+        with patch.object(HOST, "_call_rust", return_value=malformed):
+            self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "step:UnknownError")
+        self.host.reset_features(9)
+        self.assertEqual(self.host.last_rust_failure(), "")
+
+    def test_native_frame_copy_refusal_reports_status_without_partial_fanout(self) -> None:
+        self.register_feature("consumer")
+        catalog = self.register_catalog("native-copy-status", ("consumer",))
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.host._process(1 / 60)
+        previous = self.host._rust_frame
+        convert = HOST._rust_values
+
+        def refuse_frame(values: tuple[object, ...], to_native: bool) -> object:
+            if (
+                to_native
+                and len(values) == 1
+                and isinstance(values[0], dict)
+                and "families" in values[0]
+            ):
+                raise ValueError("native frame copy refused")
+            return convert(values, to_native)
+
+        with patch.object(HOST, "_rust_values", side_effect=refuse_frame):
+            self.host._process(1 / 60)
+        self.assertEqual(self.host.last_rust_failure(), "frame:InvalidInput")
+        self.assert_retains_last_frame_and_resources(("consumer",), previous)
+        self.assertTrue(self.activate_rust(catalog)["ok"])
+        self.assertEqual(self.host.last_rust_failure(), "")
+
     def test_incomplete_frame_shapes_call_no_apply(self) -> None:
         self.register_feature("provider")
         catalog = self.register_catalog("incomplete", ("provider",))

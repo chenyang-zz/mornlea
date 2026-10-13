@@ -1,0 +1,32 @@
+import json, os, pathlib, subprocess, sys, time
+root=pathlib.Path('/Users/chen/work/mornlea/.worktrees/rust-client-core')
+source='2cea2020091168ea5a6845517bc49ccbdbae0268'
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()==source
+assert not subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()
+qualified='/Users/chen/work/mornlea/packages/agent/.venv/bin'
+env=dict(os.environ,TMPDIR='/private/tmp',CARGO_BUILD_JOBS='2',PATH=qualified+':'+os.environ['PATH'],
+ MORNLEA_AGENT_PYTHON=qualified+'/python',MORNLEA_COMPANION_AGENT_PYTHON=qualified+'/python',
+ MORNLEA_PREVIOUS_SERVER_BIN='/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-server',
+ MORNLEA_PREVIOUS_PACKAGE='/private/var/folders/99/_lwvdq2d6db3qj6ngjklqf0h0000gn/T/mornlea-rust-quality.IU8wPG/previous-runtime.json')
+groups={
+ 'rust':[('rust-build',['make','rust']),('rust-check',['make','rust-check']),('dev-check',['make','dev-check'])],
+ 'go':[('test-race',['make','test-race']),('audit',['go','test','./packages/audit','-count=1'])],
+ 'static':[('godot-static',['make','godot-python-check','godot-project-check','godot-capability-check']),('openspec',['openspec','validate','--all','--strict','--no-interactive'])],
+ 'native':[('session100',['scripts/godot/smoke.sh','--iterations','100','--isolated-python','--core','rust','--exercise-session']),('python-matrix',['scripts/godot/python-runtime-check.sh','--qualify','--offline'])]
+}
+group=sys.argv[1]
+report=pathlib.Path('/private/tmp/mornlea-f3-completion-final-'+group+'-results.json')
+result={'source_sha':source,'cwd':str(root),'group':group,'started_at':time.time(),'tests':[]}
+if group in ('rust','go'):env['CARGO_TARGET_DIR']='/Users/chen/work/mornlea/packages/engine/target/cargo'
+for name,cmd in groups[group]:
+ assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()==source
+ log=pathlib.Path('/private/tmp/mornlea-f3-completion-final-'+name+'.log')
+ started=time.time()
+ with log.open('w') as stream:
+  completed=subprocess.run(cmd,cwd=root,env=env,stdout=stream,stderr=subprocess.STDOUT)
+ row={'command':cmd,'exit_code':completed.returncode,'log':str(log),'elapsed_seconds':round(time.time()-started,3)}
+ result['tests'].append(row);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(row),flush=True)
+ if completed.returncode:raise SystemExit(completed.returncode)
+result['finished_at']=time.time();result['final_source_sha']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+assert result['final_source_sha']==source
+report.write_text(json.dumps(result,indent=2)+'\n')

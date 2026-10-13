@@ -1,0 +1,14 @@
+{
+  "deadline_reached": false,
+  "errors": [],
+  "listen": "127.0.0.1:53895",
+  "packets": 82272,
+  "retained_sockets": 0,
+  "retired_connections": 201,
+  "sessions": 200,
+  "source_packets": 82272,
+  "source_sessions": 200,
+  "source_ticks": 11424,
+  "stop_requested": true,
+  "ticks": 11424
+}

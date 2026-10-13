@@ -1,13 +1,13 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-10-08.1
+doc_revision: 2026-10-13.1
 language: zh-CN
 counterpart: runtime-interface-architecture.md
 status: target-not-current
 ---
 # 目标运行时接口架构
 
-本文是 Rust/Godot 迁移后续开发的目标接口总图，属于设计与评审契约，**不表示** Rust 服务器、Rust 客户端核心或下文语义家族已经实现。[English](runtime-interface-architecture.md)。[目标架构](architecture-target.zh.md)决定语言所有权；[接口先行规范](interface-first-parallel-development.zh.md)决定何时必须先落地可编译且经过验收的声明，才能启动独立任务。当前行为仍以代码、测试和正式 OpenSpec 规范为准。
+本文是 Rust/Godot 迁移的接口总图，登记表区分已验收的运行时门面和后续产品消费者。下文示例签名仍属于规划形状，调用方须使用各已接受实现 SHA 中的实际 API。[English](runtime-interface-architecture.md)。[目标架构](architecture-target.zh.md)决定语言所有权；[接口先行规范](interface-first-parallel-development.zh.md)决定何时必须先落地可编译且经过验收的声明，才能启动独立任务。当前行为仍以代码、测试和正式 OpenSpec 规范为准。
 
 ## 1. 依赖与权威关系
 
@@ -18,10 +18,10 @@ Godot 场景 / 设备 / 嵌入式 Python
 mornlea_godot（Rust GDExtension；唯一桥接层与家族注册表）
             │ 语义输入批次 / 不可变展示帧
             ▼
-mornlea_client_core（规划中；会话、镜像、预测、帧构建）
+mornlea_client_core（F3 已验收；会话、镜像、预测、帧构建）
             │ v45 协议帧，承载于 Memory 或 TCP
             ▼
-mornlea_server（规划中；唯一权威与 tick 所有者）
+mornlea_server（F2 库；唯一权威与 tick 所有者）
       ├─────┼─────────────┐
       ▼     ▼             ▼
   领域 / 协议       存储 I/O 工作线程 ── 带版本的存档编解码器
@@ -31,13 +31,13 @@ mornlea_server（规划中；唯一权威与 tick 所有者）
 独立 Python Agent ── 带版本的回环 HTTP/MCP ──► 服务器候选动作入口
 ```
 
-`mornlea_domain`、`mornlea_protocol` 和 `mornlea_storage` 已有经过验证的 Rust 值类型和编解码接口。`mornlea_server` 与 `mornlea_client_core` 是规划中的 crate。当前 `mornlea_godot` 调用 Go 试点核心；它的 ABI 表只是迁移接口，不能证明目标生产者已存在。独立的 `mornlea_client` 渲染器 ABI 也不是规划中的客户端核心。分阶段切换完成前，Go 仍是当前产品路径和离线兼容性参照。
+`mornlea_domain`、`mornlea_protocol` 和 `mornlea_storage` 已有经过验证的 Rust 值类型和编解码接口。已验收的 F3 `mornlea_client_core` 拥有会话、镜像、预测和不可变语义发布；`mornlea_godot` 提供有类型的 Rust 生产者，同时保留可单独选择的 Go 试点。[F3 完成记录](../openspec/changes/rust-client-core/completion-handoff.md) 将 C1/C2/G1 绑定至源码 `2cea2020091168ea5a6845517bc49ccbdbae0268`、真实 F2 Memory/TCP 库集成及 Darwin arm64 原生验收。独立拥有的 F2 玩法可执行程序和 P8–P14 产品消费者及切换仍待完成。独立的 `mornlea_client` 渲染器 ABI 与客户端核心不同。分阶段切换完成前，Go 仍是离线兼容性参照和当前默认产品路径。
 
 依赖图必须无环：domain 不依赖运行时；protocol 依赖 domain；storage 编解码器使用已校验值；kernel 拥有数值算法；server 和 client core 只向下依赖；Godot 适配器依赖 client core；Python 仅使用桥接层给出的有类型数据。client core 不导入 server 或 storage；两个 Python 环境互不导入。
 
 ## 2. 契约登记表与落地顺序
 
-每行指定一个边界的**唯一所有者**。`现有`表示当前已有代码与测试；`目标`表示未来任务必须先交付可编译接口及成功/失败测试替身，然后依赖方才可并行开发。一个家族只有在真实生产者、真实消费者和集成三道门均基于已接受 SHA 通过后才能启用。
+每行指定一个边界的**唯一所有者**。`现有`表示已有代码与测试；`已接受`还要求明确的实现评审证据。`目标`行及示例签名描述规划形状，不能据此调用 API。已实现服务器 API 以 F2 change 的验收账本为准，其独立可执行程序仍须单独过门。一个家族只有在真实生产者、真实消费者和集成三道门均基于已接受 SHA 通过后才能启用。
 
 | ID | 契约所有者 / 公共接口 | 消费者 | 状态及前置条件 |
 | --- | --- | --- | --- |
@@ -49,10 +49,10 @@ mornlea_server（规划中；唯一权威与 tick 所有者）
 | S2 | `mornlea_server::transport`：Memory/TCP 分帧与会话准入 | 本地游玩、局域网、客户端测试 | S1 后的目标接口；共用核心路径。 |
 | S3 | `mornlea_server::persistence`：异步请求、确认与恢复 | server core、激活工具 | S1/S0 后的目标接口；世界只允许一个可写租约。 |
 | S4 | `mornlea_server::agent`：有界候选结果适配器 | server core、Agent 服务 | S1 后的目标接口；现有 HTTP/MCP 合同保持独立。 |
-| C1 | `mornlea_client_core::session`：状态、镜像、预测、纠正 | Godot 适配器、无界面回放 | F1 和已接受的 S2 会话契约后的目标接口。 |
-| C2 | `mornlea_client_core::presentation`：不可变帧与有界准备 | Godot 适配器、功能家族 | C1 后的目标接口；每次发布统一 epoch/revision。 |
-| G1 | `mornlea_godot`：有类型桥接、ABI/家族协商、生命周期 | 嵌入式 Python 宿主 | C1/C2 后改由 Rust 核心生产；当前 Go ABI 仅属试点。 |
-| V1 | 地形、角色、UI、音频、输入、生命周期语义家族 | Godot/Python 功能 P8–P11 | C2/G1 后的目标接口；逐家族版本化与禁用。 |
+| C1 | `mornlea_client_core::session`：状态、镜像、预测、纠正 | Godot 适配器、无界面回放 | F3 源码 `2cea2020091168ea5a6845517bc49ccbdbae0268` 已接受，使用已验收的 F1/F2 会话前置契约。 |
+| C2 | `mornlea_client_core::presentation`：不可变帧与有界准备 | Godot 适配器、功能家族 | 同一源码上的 F3 已接受；每次有界原子发布统一 epoch/revision。 |
+| G1 | `mornlea_godot`：有类型桥接、ABI/家族协商、生命周期 | 嵌入式 Python 宿主 | 同一源码上的 F3 Rust 核心生产者已接受，原生验收覆盖 Darwin arm64；Go ABI 保留为独立试点。 |
+| V1 | 地形、角色、UI、音频、输入、生命周期语义家族 | Godot/Python 功能 P8–P11 | 十类 Rust 语义生产者随 C2/G1 验收；P8–P11 功能消费者仍须独立过门，逐家族版本化与禁用。 |
 | T1 | 回放、诊断、资产与桌面激活清单 | P12/P13/P14 工具 | 所属运行时契约之后的目标接口；不得形成第二权威。 |
 
 `S1` 和 `C1` 是边界门面，不是所有玩法规则的通用插件接口。仅供一个任务使用的辅助函数保持私有。新家族应更新登记表、交付小型契约包，不扩展无类型 `Any` 或字符串消息通道。

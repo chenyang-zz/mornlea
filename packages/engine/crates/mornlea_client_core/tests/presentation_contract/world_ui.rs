@@ -628,13 +628,36 @@ fn equal_or_absent_ticks_retain_actual_source_order() {
     let mut provider = admitted_mirror();
     commit(&mut provider, player_event(0, first, neutral));
     commit(&mut provider, chat_event(accepted_fact(1, sender)));
-    commit(&mut provider, player_event(0, second, neutral));
-    commit(&mut provider, player_event(0, third, neutral));
+    // Pure reader evidence: equal player ticks retain order in supplied immutable inputs.
+    let mut observations = provider.observations().to_vec();
+    for (revision, world) in [(3, second), (4, third)] {
+        observations.push(
+            AcceptedObservation::try_new(
+                ObservationKey::try_new(
+                    provider.mirror().epoch(),
+                    ConfirmedRevision::new(revision),
+                    0,
+                )
+                .unwrap(),
+                Some(0),
+                packet(player_event(0, world, neutral)),
+                Vec::new(),
+            )
+            .unwrap(),
+        );
+    }
 
     let fixture = view_fixture();
-    let assembled = assemble(
-        &fixture,
-        &provider,
+    let view = fixture.view(
+        provider.mirror(),
+        &observations,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(5),
+    );
+    let assembled = assemble_world_ui(
+        view.frame_epoch(),
+        view.frame_revision(),
+        provider_parts(&view),
         &ClientLimits::try_new().expect("limits"),
     )
     .expect("equal and absent ticks assemble in retained order");

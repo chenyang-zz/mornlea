@@ -1,0 +1,52 @@
+import importlib.util
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('review_harness', Path('apps/mornlea-godot/tests/unit/test_rust_feature_host.py'))
+h = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(h)
+case = h.RustFeatureHostTest()
+case.setUp()
+case.register_feature('consumer')
+catalog = case.register_catalog('review-status', ('consumer',))
+assert case.activate_rust(catalog)['ok']
+case.host._process(0.016)
+prior = case.host._rust_frame
+trace = case.host.trace_json()
+results = []
+classes = ('InvalidInput', 'IncompatibleVersion', 'InvalidState', 'StaleEpoch', 'Capacity', 'Timeout', 'Disconnected', 'Io', 'Internal')
+real_call = h.HOST._call_rust
+for method in ('step', 'pull_typed_frame'):
+    for cls in classes:
+        def refuse(target, name, *args, method=method, cls=cls):
+            return h.error_envelope(cls) if name == method else real_call(target, name, *args)
+        with patch.object(h.HOST, '_call_rust', side_effect=refuse):
+            for _ in range(3):
+                case.host._process(0.016)
+                assert case.host.last_rust_failure() == method + ':' + cls
+                assert case.host._rust_frame is prior
+                assert len(case.active_feature('consumer').frames) == 1
+                assert case.host.trace_json() == trace
+        results.append(case.host.last_rust_failure())
+    for envelope in (h.error_envelope('unknown-' + 'x' * 10000), {'ok': False, 'value': None, 'error': {'class': 'Internal'}}, None):
+        def malformed(target, name, *args, method=method, envelope=envelope):
+            return envelope if name == method else real_call(target, name, *args)
+        with patch.object(h.HOST, '_call_rust', side_effect=malformed):
+            case.host._process(0.016)
+            assert case.host.last_rust_failure() == method + ':UnknownError'
+            assert case.host._rust_frame is prior
+    assert len(case.host.last_rust_failure()) < 64
+case.host._process(0.016)
+assert case.host.last_rust_failure() == ''
+assert len(case.active_feature('consumer').frames) == 2
+case.bridge.refused.add('pull_typed_frame')
+case.host._process(0.016)
+assert case.host.last_rust_failure() == 'pull_typed_frame:InvalidState'
+case.bridge.refused.add('reset')
+case.host.reset_features(8)
+assert case.host.last_rust_failure() == 'pull_typed_frame:InvalidState'
+case.bridge.refused.remove('reset')
+case.host.reset_features(9)
+assert case.host.last_rust_failure() == ''
+print(json.dumps({'source_sha': 'c0c008684057971e9311a2eb30f675c1f3312aad', 'exact_classes': results, 'three_repeated_refusals_each': True, 'malformed_envelopes_per_method': 3, 'bounded_status': True, 'unchanged_trace': True, 'prior_frame_and_fanout_preserved': True, 'recovery_clears': True, 'refused_reset_retains': True, 'successful_reset_clears': True}, indent=2))

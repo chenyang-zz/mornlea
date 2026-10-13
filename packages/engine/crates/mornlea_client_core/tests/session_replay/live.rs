@@ -818,3 +818,84 @@ fn confirmations_and_rejections_share_capacity_before_owner_mutation() {
     );
     assert_eq!(c.core.snapshot(c.epoch).unwrap(), terminal);
 }
+
+#[test]
+fn freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment() {
+    use mornlea_client_core::FamilyRecords;
+    let mut connection = Connection::new();
+    connection.feed(authority(12, 0, Dimension::OVERWORLD));
+    connection.step();
+    connection
+        .core
+        .submit_input(connection.epoch, action(connection.epoch))
+        .unwrap();
+    connection.step();
+    for tick in [11, 12] {
+        let mut packet = authority(tick, 1, Dimension::DEPTHS);
+        if let ServerPacket::PlayerState(state) = &mut packet {
+            state.health = 1;
+        }
+        connection.feed(packet);
+        connection.step();
+        let frame = connection.core.snapshot(connection.epoch).unwrap();
+        assert_eq!(frame.confirmed_revision().get(), 1);
+        assert!(frame.families().iter().all(|family| {
+            match family.records() {
+                FamilyRecords::WorldUi(records) => records
+                    .iter()
+                    .all(|record| record.header().source_tick() != Some(tick)),
+                FamilyRecords::Input(records) => records
+                    .iter()
+                    .all(|record| record.header().source_tick() != Some(tick)),
+                _ => true,
+            }
+        }));
+    }
+}
+
+#[test]
+fn freshness_live_stale_actor_state_cannot_publish_old_pose() {
+    use mornlea_client_core::FamilyRecords;
+    use mornlea_domain::HostileId;
+    use mornlea_protocol::{
+        HOSTILE_KIND_NIGHTWALKER, HostileSpawn, HostileSpawnRecord, HostileState,
+        HostileStateRecord,
+    };
+    let mut connection = Connection::new();
+    let id = HostileId::try_new(1).unwrap();
+    connection.feed(ServerPacket::HostileSpawn(
+        HostileSpawn::new(
+            10,
+            vec![HostileSpawnRecord {
+                id,
+                dimension: Dimension::OVERWORLD,
+                position: [2.0, 64.0, 2.0],
+                yaw: 0.0,
+                health: 20,
+                kind: HOSTILE_KIND_NIGHTWALKER,
+            }],
+        )
+        .unwrap(),
+    ));
+    connection.step();
+    for tick in [12, 11, 12] {
+        connection.feed(ServerPacket::HostileState(
+            HostileState::new(
+                tick,
+                vec![HostileStateRecord {
+                    id,
+                    position: [tick as f32, 64.0, 2.0],
+                    velocity: [0.0; 3],
+                    yaw: 0.0,
+                    health: 19,
+                    kind: HOSTILE_KIND_NIGHTWALKER,
+                }],
+            )
+            .unwrap(),
+        ));
+        connection.step();
+        let frame = connection.core.snapshot(connection.epoch).unwrap();
+        assert_eq!(frame.confirmed_revision().get(), 2);
+        assert!(frame.families().iter().all(|family| !matches!(family.records(), FamilyRecords::Actors(records) if records.iter().any(|record| record.header().source_tick() == Some(11)))));
+    }
+}

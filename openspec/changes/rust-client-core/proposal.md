@@ -4,13 +4,9 @@ The Godot pilot still receives its session, mirror, prediction and presentation 
 
 ## Status and prerequisites
 
-The user authorized the outstanding headless native/runtime qualification and
-closeout on 2026-10-11. [Runtime qualification plan](plans/17-runtime-qualification.md)
-supersedes the earlier code-only launch restriction for this round and binds F2's
-checked stage prerequisite without claiming its separate gameplay executable is
-complete. Defaults, production server scope and remote publication remain unchanged.
+F3 is complete at runtime source `2cea2020091168ea5a6845517bc49ccbdbae0268`, with all 52 nodes closed by independent exact-source reviews and actual runtime/stage evidence in the [completion handoff](completion-handoff.md). The user authorized headless qualification on 2026-10-11 and completion, global review and local dev merge on 2026-10-13. [Packet17](plans/17-runtime-qualification.md) retains the F2 checked stage prerequisite; [packet18](plans/18-completion-review-repairs.md) resolves final-review defects without changing the original criteria.
 
-The code-only implementation batch for F3 in [`docs/architecture-target.md`](../../../docs/architecture-target.md) has been repaired after comprehensive review of source `b383673e383dcf1f6177998854e4752a28304a2b`; the [repair handoff](review-repair-handoff.md) binds current code evidence to `8e561c4122e179bd17d4bbf1cb2a730822fd4cd2` while full runtime acceptance remains pending. Its implementation entry bound completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and the jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contract to accepted source identities in `ledger.md`. Full F3 final integration acceptance still requires the F2 Rust server parity evidence and the pending native/runtime qualification gates. Completion requires the implementation SHA, executed non-empty tests, corpus coverage, failure-path results and rollback evidence in `ledger.md`; file existence or OpenSpec status is insufficient.
+The original implementation bound completed [F1](../archive/2026-10-08-rust-runtime-foundation-acceptance/proposal.md) and jointly accepted [F2](../rust-authoritative-server/proposal.md) common/Memory/TCP S2 contracts to accepted identities in `ledger.md`. Actual F2 library integration, native bridge release/marshalling, rebuilt 100-process sessions and full Rust/Go/audit/OpenSpec gates now pass. F2's separate gameplay executable, P8–P14 features/default cutover and remote publication remain independently owned. Historical code-only restrictions below apply to the earlier batch; they do not invalidate the subsequently authorized completed runtime round.
 
 ## What Changes
 
@@ -43,10 +39,10 @@ Existing wire, save and gameplay requirements remain the compatibility oracle; a
 
 ## Deferred and abandoned
 
-Production Godot features and visual handoffs remain in P8–P12; distribution and default retirement remain P13–P14. The code-only implementation does not establish full runtime or product acceptance.
+Production Godot features and visual handoffs remain in P8–P12; distribution and default retirement remain P13–P14. The earlier code-only implementation did not establish runtime acceptance; the completion handoff now records full F3 runtime acceptance. Product feature/default acceptance remains separate.
 
 
-## Current code-only implementation batch
+## Historical code-only implementation batch
 
 The user selected the complete semantic client core, safe Rust producer adapter code, and Python host ownership migration, including all ten families and twenty typed actions. The approved design and [code-only execution packet](plans/07-code-only-implementation-handoff.md) preserve the existing architecture and node identities. Automated core/replay/adapter-routine/host/static checks must not launch Godot in any mode, including headless or an indirect runner. Scenes, models, renderer/resource realization, visual qualification, default switching, and the running F2 server implementation remain outside this batch.
 

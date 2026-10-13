@@ -1,0 +1,33 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+  "group": "static",
+  "started_at": 1791861341.5201511,
+  "tests": [
+    {
+      "command": [
+        "make",
+        "godot-python-check",
+        "godot-project-check",
+        "godot-capability-check"
+      ],
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f3-completion-final-godot-static.log",
+      "elapsed_seconds": 11.255
+    },
+    {
+      "command": [
+        "openspec",
+        "validate",
+        "--all",
+        "--strict",
+        "--no-interactive"
+      ],
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f3-completion-final-openspec.log",
+      "elapsed_seconds": 2.007
+    }
+  ],
+  "finished_at": 1791861355.1176472,
+  "final_source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268"
+}

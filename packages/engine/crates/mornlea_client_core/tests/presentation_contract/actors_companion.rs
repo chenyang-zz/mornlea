@@ -796,13 +796,30 @@ fn backwards_tick_keeps_observation_order_not_tick_order() {
             vec![state_record(id, [1.5, 70.0, 1.5], 0.5, 0.0, false)],
         ),
     );
-    commit(
-        &mut provider,
-        states_event(90, vec![state_record(id, [2.0, 70.0, 2.0], 0.5, 0.0, true)]),
+    // Pure reader evidence: real ingress rejects this stale companion batch.
+    let mut observations = provider.observations().to_vec();
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(3), 0)
+                .unwrap(),
+            Some(90),
+            packet(states_event(
+                90,
+                vec![state_record(id, [2.0, 70.0, 2.0], 0.5, 0.0, true)],
+            )),
+            Vec::new(),
+        )
+        .unwrap(),
     );
 
     let fixture = view_fixture();
-    let records = project_companion(&fixture.view_of(&provider)).expect("stale batch projects");
+    let records = project_companion(&fixture.view(
+        provider.mirror(),
+        &observations,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(4),
+    ))
+    .expect("stale batch projects");
     assert_eq!(records.len(), 3);
 
     let late = &records[2];

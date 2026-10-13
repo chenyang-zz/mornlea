@@ -1,0 +1,59 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "reviewer": "Codex /root/review_provider",
+  "recorded_at": "2026-10-13T03:21:09.844711+00:00",
+  "cwd": "/private/tmp/mornlea-f3-completion-provider-final-review",
+  "cargo_target": "/private/tmp/mornlea-f3-completion-provider-cargo",
+  "artifacts": [
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-carry.json",
+      "bytes": 1085,
+      "sha256": "656c04eb931f04748396561b44bddcf9222e52f28bc31d98b77a385963b0f085"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-core-list.log",
+      "bytes": 26776,
+      "sha256": "1e4afa1af0e98397e65ed0818544f941068eaf65660a156d580c6bb314a83152"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-freshness.log",
+      "bytes": 1671,
+      "sha256": "3ef2b6033932c720ab6fba13276f4949b9e01c379cf0872a3bca020d7c31c9e2"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-godot-list.log",
+      "bytes": 6420,
+      "sha256": "a58dcc14d767103f4dc7b854419f737a12d7b45df3bb387c0beeaacf794f86df"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-identity.log",
+      "bytes": 153,
+      "sha256": "18afa81b04aba36813165cf6d2a332d50b2f1a8153829ae7fda513f1c7d0934e"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-inventory.log",
+      "bytes": 20547,
+      "sha256": "6b9ea425a108316a0a9036dec46a00b6e369d19865778016b827e613e66b0fa7"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-inventory.py",
+      "bytes": 5054,
+      "sha256": "925107902226beec91263f3db9689b60da68db24eb4cd48b2cb5e9fe79ef848b"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-protocol-list.log",
+      "bytes": 8419,
+      "sha256": "4450867b6aedb8e4eaeff339c88fa416d33ffc90ce50076f394d16697797991b"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-review.md",
+      "bytes": 13843,
+      "sha256": "48d83d3a3dfdcd9509822b902074ec6ebcc782b60181f6377f9e8d7e18d71ca0"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-final-tests.log",
+      "bytes": 8149,
+      "sha256": "de68bdf0503a7804b7e6efae5d6d7bc70b035c6202fd847d25abe4663a01f3d5"
+    }
+  ]
+}

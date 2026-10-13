@@ -75,6 +75,7 @@ pub struct MirrorProvider {
     mirror: ConfirmedMirror,
     observations: Vec<AcceptedObservation>,
     limits: ClientLimits,
+    freshness: SourceFreshness,
 }
 
 impl MirrorProvider {
@@ -92,10 +93,13 @@ impl MirrorProvider {
         parts: ConfirmedMirrorParts,
         limits: ClientLimits,
     ) -> Result<Self, ClientError> {
+        let mirror = ConfirmedMirror::try_new(parts)?;
+        check_actor_capacity(mirror.actors(), &limits)?;
         Ok(Self {
-            mirror: ConfirmedMirror::try_new(parts)?,
+            mirror,
             observations: Vec::new(),
             limits,
+            freshness: SourceFreshness::default(),
         })
     }
 
@@ -160,8 +164,10 @@ impl MirrorProvider {
         Ok(())
     }
 
-    /// Commits one complete accepted observation and returns the new
-    /// confirmed revision it issued.
+    /// Commits one complete accepted observation and returns its revision.
+    /// Stale player facts and wholly stale lenient actor states return the
+    /// current revision without queuing an observation. Strict actor batches
+    /// reject any stale member; mixed lenient batches retain original ordinals.
     ///
     /// The staged key supplies the epoch, the expected next revision and the
     /// retained ordinal; the staged tick and resolution entries are
@@ -195,9 +201,22 @@ impl MirrorProvider {
         }
         let event =
             Event::try_from(staged.packet().clone()).map_err(|_| ClientError::InvalidInput)?;
-        if self.observations.len() + 1 > self.limits.inbound_observations() {
-            // The queue bound is checked before any staging allocation, so a
-            // refused observation stays owned by the caller for retry.
+        if let Event::PlayerState(state) = &event
+            && self
+                .freshness
+                .player_tick
+                .is_some_and(|tick| state.server_tick() <= tick)
+        {
+            return Ok(self.mirror.revision());
+        }
+        // Count refusal precedes store cloning; stale player facts need no queue slot.
+        if self
+            .observations
+            .len()
+            .checked_add(1)
+            .ok_or(ClientError::Capacity)?
+            > self.limits.inbound_observations()
+        {
             return Err(ClientError::Capacity);
         }
         let revision = ConfirmedRevision::new(next);
@@ -216,7 +235,13 @@ impl MirrorProvider {
             &mut world_ui,
             &mut resolved,
         )?;
-        let committed = AcceptedObservation::try_new(
+        check_actor_capacity(&actors, &self.limits)?;
+        let mut freshness = self.freshness.clone();
+        let suppressed = freshness.stage(&event, &actors, &mut resolved)?;
+        if actor_state_len(&event).is_some_and(|len| suppressed.len() == len) {
+            return Ok(self.mirror.revision());
+        }
+        let mut committed = AcceptedObservation::try_new(
             key,
             source_tick(&event),
             staged.packet().clone(),
@@ -224,6 +249,7 @@ impl MirrorProvider {
             // borrowed slice length, so retained accounting needs no hidden getter.
             resolved.into_boxed_slice().into_vec(),
         )?;
+        committed.suppress_actor_records(suppressed);
         // Copying the bounded prior queue stages one complete addition while
         // preserving its allocation and mirror state on every refusal.
         let mut observations = self.observations.clone();
@@ -241,8 +267,200 @@ impl MirrorProvider {
             world_ui: Some(world_ui),
         })?;
         self.observations = observations;
+        self.freshness = freshness;
         Ok(revision)
     }
+}
+
+/// Source watermarks survive queue consumption and retire with live identities.
+/// This owner is staged beside the stores, never updated on a refused commit.
+#[derive(Clone, Default)]
+struct SourceFreshness {
+    player_tick: Option<u64>,
+    actors: Vec<(ActorId, u64)>,
+}
+
+impl SourceFreshness {
+    fn stage(
+        &mut self,
+        event: &Event,
+        actors: &ActorConfirmed,
+        resolved: &mut Vec<ResolvedActor>,
+    ) -> Result<Vec<usize>, ClientError> {
+        let mut suppressed = Vec::new();
+        match event {
+            Event::PlayerState(state) => self.player_tick = Some(state.server_tick()),
+            Event::RemotePlayerSpawn(spawn) => self.actors.push((
+                ActorId::RemotePlayer(spawn.player_id()),
+                spawn.server_tick(),
+            )),
+            Event::CompanionSpawn(spawn) => self
+                .actors
+                .push((ActorId::Companion(spawn.id()), spawn.server_tick())),
+            Event::HostileSpawn(spawn) => self.actors.extend(
+                spawn
+                    .spawns()
+                    .iter()
+                    .map(|row| (ActorId::Hostile(row.id()), spawn.server_tick())),
+            ),
+            Event::PassiveSpawn(spawn) => self.actors.extend(
+                spawn
+                    .spawns()
+                    .iter()
+                    .map(|row| (ActorId::Passive(row.id()), spawn.server_tick())),
+            ),
+            Event::ProjectileSpawn(spawn) => self.actors.extend(
+                spawn
+                    .spawns()
+                    .iter()
+                    .map(|row| (ActorId::Projectile(row.id()), spawn.server_tick())),
+            ),
+            Event::RemotePlayerStates(states) => {
+                for row in states.states() {
+                    self.update(
+                        ActorId::RemotePlayer(row.player_id()),
+                        states.server_tick(),
+                        true,
+                        0,
+                        &mut suppressed,
+                    )?;
+                }
+            }
+            Event::CompanionStates(states) => {
+                for row in states.states() {
+                    self.update(
+                        ActorId::Companion(row.id()),
+                        states.server_tick(),
+                        true,
+                        0,
+                        &mut suppressed,
+                    )?;
+                }
+            }
+            Event::HostileState(states) => {
+                for (index, row) in states.states().iter().enumerate() {
+                    self.update(
+                        ActorId::Hostile(row.id()),
+                        states.server_tick(),
+                        false,
+                        index,
+                        &mut suppressed,
+                    )?;
+                }
+            }
+            Event::PassiveState(states) => {
+                for (index, row) in states.states().iter().enumerate() {
+                    self.update(
+                        ActorId::Passive(row.id()),
+                        states.server_tick(),
+                        false,
+                        index,
+                        &mut suppressed,
+                    )?;
+                }
+            }
+            Event::ProjectileState(states) => {
+                for (index, row) in states.states().iter().enumerate() {
+                    self.update(
+                        ActorId::Projectile(row.id()),
+                        states.server_tick(),
+                        false,
+                        index,
+                        &mut suppressed,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        // Only state rows are suppressed; removals and drop upserts retain source order.
+        if !suppressed.is_empty() {
+            let mut index = 0;
+            resolved.retain(|_| {
+                let current = suppressed.binary_search(&index).is_err();
+                index += 1;
+                current
+            });
+        }
+        if matches!(
+            event,
+            Event::RemotePlayerDespawn(_)
+                | Event::CompanionDespawn(_)
+                | Event::HostileDespawn(_)
+                | Event::PassiveDespawn(_)
+                | Event::ProjectileDespawn(_)
+        ) {
+            self.actors.retain(|(id, _)| match id {
+                ActorId::RemotePlayer(id) => {
+                    actors.remote_players().iter().any(|(live, _)| live == id)
+                }
+                ActorId::Companion(id) => actors.companions().iter().any(|(live, _)| live == id),
+                ActorId::Hostile(id) => actors.hostiles().iter().any(|(live, _)| live == id),
+                ActorId::Passive(id) => actors.passives().iter().any(|(live, _)| live == id),
+                ActorId::Projectile(id) => actors.projectiles().iter().any(|(live, _)| live == id),
+                ActorId::Drop(_) => false,
+            });
+        }
+        self.actors = std::mem::take(&mut self.actors)
+            .into_boxed_slice()
+            .into_vec();
+        Ok(suppressed)
+    }
+
+    fn update(
+        &mut self,
+        id: ActorId,
+        tick: u64,
+        strict: bool,
+        index: usize,
+        suppressed: &mut Vec<usize>,
+    ) -> Result<(), ClientError> {
+        if let Some((_, held)) = self.actors.iter_mut().find(|(live, _)| *live == id) {
+            if tick <= *held {
+                if strict {
+                    return Err(ClientError::InvalidInput);
+                }
+                suppressed.push(index);
+            } else {
+                *held = tick;
+            }
+        } else {
+            // Adopted live mirrors have no source tick; their first checked state seeds it.
+            self.actors.push((id, tick));
+        }
+        Ok(())
+    }
+}
+
+fn actor_state_len(event: &Event) -> Option<usize> {
+    match event {
+        Event::HostileState(states) => Some(states.states().len()),
+        Event::PassiveState(states) => Some(states.states().len()),
+        Event::ProjectileState(states) => Some(states.states().len()),
+        _ => None,
+    }
+}
+
+/// Fixed compatibility ceilings and the selected aggregate bound limit live retention.
+fn check_actor_capacity(actors: &ActorConfirmed, limits: &ClientLimits) -> Result<(), ClientError> {
+    let counts = [
+        (actors.remote_players().len(), limits.family_records()),
+        (actors.hostiles().len(), 64),
+        (actors.passives().len(), 32),
+        (actors.projectiles().len(), 128),
+        (actors.companions().len(), 4),
+        (actors.drops().len(), 800),
+    ];
+    let mut total = 0usize;
+    for (count, ceiling) in counts {
+        if count > ceiling.min(limits.family_records()) {
+            return Err(ClientError::Capacity);
+        }
+        total = total.checked_add(count).ok_or(ClientError::Capacity)?;
+    }
+    if total > limits.family_records() {
+        return Err(ClientError::Capacity);
+    }
+    Ok(())
 }
 
 /// Stages one semantic event onto the staged store copies.
@@ -706,6 +924,7 @@ pub(crate) fn observation_queue_bytes(
                 .checked_mul(size_of::<ResolvedActor>())
                 .ok_or(ClientError::Capacity)?,
         )?;
+        add(&mut total, observation.actor_suppression_bytes()?)?;
         use mornlea_protocol::ServerPacket::*;
         match observation.packet() {
             ChunkSnapshot(snapshot) => {

@@ -883,23 +883,44 @@ fn late_graze_keeps_observation_order_not_tick_order() {
             )],
         ),
     );
-    commit(
-        &mut provider,
-        state_event(
-            90,
-            vec![state_record(
-                id,
-                [2.0, 70.0, 2.0],
-                [0.5, 0.0, 0.0],
-                0.5,
-                20,
-                false,
-            )],
-        ),
+    // Pure reader evidence: real ingress suppresses this stale passive row.
+    let mut observations = provider.observations().to_vec();
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(3), 0)
+                .unwrap(),
+            Some(90),
+            packet(state_event(
+                90,
+                vec![state_record(
+                    id,
+                    [2.0, 70.0, 2.0],
+                    [0.5, 0.0, 0.0],
+                    0.5,
+                    20,
+                    false,
+                )],
+            )),
+            vec![
+                ResolvedActor::try_new(
+                    ActorKind::Passive,
+                    ActorId::Passive(id),
+                    Dimension::OVERWORLD,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
     );
 
     let fixture = view_fixture();
-    let records = project_passive(&fixture.view_of(&provider)).expect("late graze projects");
+    let records = project_passive(&fixture.view(
+        provider.mirror(),
+        &observations,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(4),
+    ))
+    .expect("late graze projects");
     assert_eq!(records.len(), 3);
 
     let late = &records[2];

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "runtime_source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "historical_evidence_sha": "773d35121ced12246b965298ee47775b82af7324",
+  "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+  "recorded_at": "2026-10-13T03:59:58.446762+00:00",
+  "checks": [
+    {
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "2cea2020091168ea5a6845517bc49ccbdbae0268"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "openspec",
+        "validate",
+        "--all",
+        "--strict",
+        "--no-interactive"
+      ],
+      "exit_code": 0,
+      "output": "\u2713 spec/authoritative-armor\n\u2713 spec/authoritative-bed-sleep\n\u2713 spec/authoritative-chests\n\u2713 spec/authoritative-companion-entities\n\u2713 spec/authoritative-crafting\n\u2713 spec/authoritative-daylight\n\u2713 spec/authoritative-difficulty\n\u2713 spec/authoritative-farming\n\u2713 spec/authoritative-fluid\n\u2713 spec/authoritative-furnaces\n\u2713 spec/authoritative-grid-crafting\n\u2713 spec/authoritative-health\n\u2713 spec/authoritative-hostile-nightwalker\n\u2713 spec/authoritative-hotbar\n\u2713 spec/authoritative-hunger\n\u2713 spec/authoritative-inventory\n\u2713 spec/authoritative-item-dropping\n\u2713 spec/authoritative-mining\n\u2713 spec/authoritative-player-melee\n\u2713 spec/authoritative-projectiles\n\u2713 spec/authoritative-spawn-support\n\u2713 spec/authoritative-weather\n\u2713 spec/avatar-locomotion\n\u2713 spec/bounded-benchmark-workload\n\u2713 spec/break-burst-particles\n\u2713 spec/camera-perspectives\n\u2713 spec/celestial-sky-presentation\n\u2713 spec/chunk-persistence\n\u2713 spec/common-block-materials\n\u2713 spec/companion-agent-http-contract\n\u2713 spec/companion-agent-mcp-tools\n\u2713 spec/companion-agent-memory\n\u2713 spec/companion-chat-protocol\n\u2713 spec/companion-client-presentation\n\u2713 spec/companion-dialogue\n\u2713 spec/companion-follow\n\u2713 spec/companion-identity-configuration\n\u2713 spec/companion-pathfinding\n\u2713 spec/companion-persistence\n\u2713 spec/companion-persona\n\u2713 spec/companion-planner\n\u2713 spec/companion-task-queue\n\u2713 spec/companion-world-actions\n\u2713 spec/container-ui-presentation\n\u2713 spec/continuous-integration\n\u2713 spec/cream-game-presentation\n\u2713 spec/debug-panel\n\u2713 spec/deterministic-block-updates\n\u2713 spec/deterministic-ore-generation\n\u2713 spec/deterministic-tree-generation\n\u2713 spec/dev-capture\n\u2713 spec/development-governance\n\u2713 spec/door\n\u2713 spec/first-person-viewmodel\n\u2713 spec/fluid-presentation\n\u2713 spec/fluid-survival\n\u2713 spec/game-overlay-webview\n\u2713 spec/godot-client-pilot\n\u2713 change/godot-complete-actors\n\u2713 change/godot-default-client-switch\n\u2713 change/godot-desktop-audio\n\u2713 change/godot-desktop-packaging\n\u2713 change/godot-production-terrain\n\u2713 change/godot-production-tooling\n\u2713 change/godot-ui-migration\n\u2713 spec/hardware-performance-baselines\n\u2713 spec/hostile-mob-persistence\n\u2713 spec/hostile-mob-protocol\n\u2713 spec/local-audio-feedback\n\u2713 spec/local-data-migration\n\u2713 spec/mining-crack-presentation\n\u2713 spec/module-scoped-logging\n\u2713 spec/multidimension-world\n\u2713 spec/natural-grass-generation\n\u2713 spec/natural-material-generation\n\u2713 spec/oak-sapling-regrowth\n\u2713 spec/passive-cattle\n\u2713 spec/passive-cattle-presentation\n\u2713 spec/passive-death-presentation\n\u2713 spec/passive-graze-lure\n\u2713 spec/passive-mob-persistence\n\u2713 spec/passive-mob-protocol\n\u2713 spec/persistent-item-drops\n\u2713 spec/placeable-torches\n\u2713 spec/plant-visual-presentation\n\u2713 spec/player-bow\n\u2713 spec/player-persistence\n\u2713 spec/project-identity\n\u2713 spec/ranged-hostile-mob\n\u2713 spec/repository-code-organization\n\u2713 change/rust-authoritative-server\n\u2713 change/rust-client-core\n\u2713 spec/rust-client-render-cutover\n\u2713 spec/rust-client-render-entities\n\u2713 spec/rust-client-render-terrain\n\u2713 spec/rust-client-window\n\u2713 spec/rust-engine-collision-raycast\n\u2713 spec/rust-engine-fluid\n\u2713 spec/rust-engine-lod-shell\n\u2713 spec/rust-engine-mesh\n\u2713 spec/rust-engine-physics-step\n\u2713 spec/rust-engine-worldgen\n\u2713 spec/rust-runtime-foundation\n\u2713 spec/rust-runtime-foundation-acceptance\n\u2713 spec/saturation-jitter\n\u2713 spec/seasonal-time-temperature\n\u2713 spec/session-disconnect-reason\n\u2713 spec/settings-menu\n\u2713 spec/short-block-presentation\n\u2713 spec/sneak\n\u2713 spec/snow-cover\n\u2713 spec/sprint\n\u2713 spec/stack-splitting\n\u2713 spec/static-block-light\n\u2713 spec/survival-hud-presentation\n\u2713 spec/target-runtime-interface-architecture\n\u2713 spec/test-timing-discipline\n\u2713 spec/texture-pack-loading\n\u2713 spec/tiered-swords-combat\n\u2713 spec/tool-durability\n\u2713 spec/tunable-constants\n\u2713 spec/visual-verification\n\u2713 spec/voxel-visual-presentation\n\u2713 spec/weather-camera-showcase\n\u2713 spec/webview-menu-ui\n\u2713 spec/world-loading-screen\n\u2713 spec/world-streaming\nTotals: 127 passed, 0 failed (127 items)\n"
+    }
+  ],
+  "decoded_provenance_check": "All290 existing artifact size/SHA256 and159 gzip decoded size/SHA256 plus exact-origin byte comparison passed; gzip mtime is0."
+}

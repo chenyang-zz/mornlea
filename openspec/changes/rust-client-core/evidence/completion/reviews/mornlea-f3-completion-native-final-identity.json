@@ -1,0 +1,205 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "accepted_host_sha": "c0c008684057971e9311a2eb30f675c1f3312aad",
+  "byte_identical_scopes": [
+    "apps/mornlea-godot",
+    "scripts/godot",
+    "packages/engine/crates/mornlea_godot",
+    "packages/engine/crates/mornlea_client_core/src/contracts.rs",
+    "packages/engine/crates/mornlea_client_core/src/presentation/frame.rs",
+    "packages/engine/crates/mornlea_client_core/build.rs"
+  ],
+  "inventory_only_append_test_references": [
+    {
+      "path": "/families/1/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/families/3/rust_tests",
+      "added": 10
+    },
+    {
+      "path": "/families/4/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/families/6/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/packet_variants/7/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/packet_variants/11/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/12/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/packet_variants/13/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/15/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/21/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/22/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/23/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/packet_variants/26/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/packet_variants/27/rust_tests",
+      "added": 5
+    },
+    {
+      "path": "/packet_variants/28/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/packet_variants/30/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/31/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/packet_variants/32/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/packet_variants/33/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/packet_variants/34/rust_tests",
+      "added": 3
+    },
+    {
+      "path": "/packet_variants/35/rust_tests",
+      "added": 1
+    },
+    {
+      "path": "/limits/24/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/limits/25/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/limits/26/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/limits/27/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/limits/28/rust_tests",
+      "added": 2
+    },
+    {
+      "path": "/rows/1/rust_test",
+      "added": 1
+    },
+    {
+      "path": "/rows/3/rust_test",
+      "added": 10
+    },
+    {
+      "path": "/rows/4/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/6/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/38/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/42/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/43/rust_test",
+      "added": 1
+    },
+    {
+      "path": "/rows/44/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/46/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/52/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/53/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/54/rust_test",
+      "added": 1
+    },
+    {
+      "path": "/rows/57/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/58/rust_test",
+      "added": 5
+    },
+    {
+      "path": "/rows/59/rust_test",
+      "added": 1
+    },
+    {
+      "path": "/rows/61/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/62/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/63/rust_test",
+      "added": 1
+    },
+    {
+      "path": "/rows/64/rust_test",
+      "added": 2
+    },
+    {
+      "path": "/rows/65/rust_test",
+      "added": 3
+    },
+    {
+      "path": "/rows/66/rust_test",
+      "added": 1
+    }
+  ],
+  "contract_sha": "53c88b42016db0da0d1459799c6b301a4e7232a7c4bbe4a8c85afdf4d6f415b1",
+  "host_sha256": "20ea27fdc7c9bad6c85bb304d5e7c651cf6d805ae87c633c3467ca1a9c532a73",
+  "tests_sha256": "093eee2897f84ec7bcaceb5591af37edb70069ea1c47e3c74503a8d5b31e7deb"
+}

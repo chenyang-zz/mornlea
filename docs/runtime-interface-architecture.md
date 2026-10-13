@@ -1,13 +1,13 @@
 ---
 doc_id: runtime-interface-architecture
-doc_revision: 2026-10-08.1
+doc_revision: 2026-10-13.1
 language: en
 counterpart: runtime-interface-architecture.zh.md
 status: target-not-current
 ---
 # Target runtime interface architecture
 
-This is the target interface map for work after the Rust/Godot migration. It is a design contract for planning and review, not a claim that the Rust server, Rust client core, or the listed presentation families already exist. [中文版](runtime-interface-architecture.zh.md). The [target architecture](architecture-target.md) decides language ownership; the [interface-first guide](interface-first-parallel-development.md) decides when a declaration must compile and be accepted before independent implementation starts. Current behavior remains defined by code, tests, and canonical OpenSpec specifications.
+This is the interface map for the Rust/Godot migration. The register distinguishes accepted runtime facades from future product consumers. The illustrative signatures below remain planning shapes; callers use the APIs at each accepted implementation SHA. [中文版](runtime-interface-architecture.zh.md). The [target architecture](architecture-target.md) decides language ownership; the [interface-first guide](interface-first-parallel-development.md) decides when a declaration must compile and be accepted before independent implementation starts. Current behavior remains defined by code, tests, and canonical OpenSpec specifications.
 
 ## 1. Dependency and authority map
 
@@ -18,10 +18,10 @@ Godot scenes / devices / embedded Python
 mornlea_godot (Rust GDExtension; one bridge and family registry)
             │ semantic input batches / immutable presentation frames
             ▼
-mornlea_client_core (planned; session, mirror, prediction, frame builder)
+mornlea_client_core (accepted F3; session, mirror, prediction, frame builder)
             │ v45 protocol frames through Memory or TCP
             ▼
-mornlea_server (planned; sole authority and tick owner)
+mornlea_server (F2 library; sole authority and tick owner)
       ├─────┼─────────────┐
       ▼     ▼             ▼
   domain / protocol   storage I/O workers ── versioned save codecs
@@ -31,13 +31,13 @@ mornlea_server (planned; sole authority and tick owner)
 Independent Python Agent ── versioned loopback HTTP/MCP ──► server candidate intake
 ```
 
-`mornlea_domain`, `mornlea_protocol`, and `mornlea_storage` already contain validated Rust value and codec surfaces. `mornlea_server` and `mornlea_client_core` are planned crates. The current `mornlea_godot` calls a Go pilot core; its ABI table is a migration surface, not proof of the target producer. The standalone `mornlea_client` renderer ABI is separate and must never be mistaken for the planned client core. Go remains an offline compatibility oracle and current product path until the staged cutover.
+`mornlea_domain`, `mornlea_protocol`, and `mornlea_storage` contain validated Rust value and codec surfaces. The accepted F3 `mornlea_client_core` owns session, mirror, prediction and immutable semantic publication; `mornlea_godot` exposes its typed Rust producer alongside the separately selectable Go pilot. The [F3 completion handoff](../openspec/changes/rust-client-core/completion-handoff.md) binds C1/C2/G1 to source `2cea2020091168ea5a6845517bc49ccbdbae0268`, actual F2 Memory/TCP library integration and Darwin arm64 native qualification. The separately owned F2 gameplay executable and P8–P14 product consumers/cutover remain pending. The standalone `mornlea_client` renderer ABI is separate from the client core. Go remains an offline compatibility oracle and the current default product path until the staged cutover.
 
 The dependency graph is acyclic: domain has no runtime dependency; protocol depends on domain; storage codecs depend on validated values; kernel owns numerical algorithms; server and client core depend downward on these contracts; Godot adapter depends on client core; Python depends only on typed bridge values. The client core never imports server or storage. Neither Python runtime imports the other.
 
 ## 2. Contract register and landing order
 
-Each row names the **one owner** of a boundary. `Existing` means source and tests are present today; `target` means a future task must land the named compile-ready surface and its success/failure double before dependent providers start. A family is enabled only after real producer, real consumer, and integration gates pass on an accepted SHA.
+Each row names the **one owner** of a boundary. `Existing` means source and tests are present; `accepted` additionally names reviewed implementation evidence. `Target` rows and illustrative signatures describe planning shapes and do not grant callable APIs. Use the accepted F2 change ledger for implemented server APIs; its separately owned executable remains gated. A family is enabled only after real producer, real consumer, and integration gates pass on an accepted SHA.
 
 | ID | Contract owner / public surface | Consumers | State and predecessor |
 | --- | --- | --- | --- |
@@ -49,10 +49,10 @@ Each row names the **one owner** of a boundary. `Existing` means source and test
 | S2 | `mornlea_server::transport`: Memory/TCP framing and session admission | local play, LAN, client tests | Target after S1; one core path. |
 | S3 | `mornlea_server::persistence`: async requests, acknowledgments, recovery | server core, activation tooling | Target after S1/S0; one writable world lease. |
 | S4 | `mornlea_server::agent`: bounded candidate/result adapter | server core, Agent service | Target after S1; existing HTTP/MCP contract remains independent. |
-| C1 | `mornlea_client_core::session`: state, mirror, prediction, correction | Godot adapter, headless replay | Target after F1 and accepted S2 session contract. |
-| C2 | `mornlea_client_core::presentation`: immutable frame and bounded preparation | Godot adapter, feature families | Target after C1; one epoch/revision per publication. |
-| G1 | `mornlea_godot`: typed bridge, ABI/family negotiation, lifecycle | embedded Python host | Target Rust-core producer after C1/C2; existing Go ABI is pilot only. |
-| V1 | terrain, actors, UI, audio, input and lifecycle semantic families | Godot/Python features P8–P11 | Target after C2/G1; individually versioned and disableable. |
+| C1 | `mornlea_client_core::session`: state, mirror, prediction, correction | Godot adapter, headless replay | Accepted F3 at `2cea2020091168ea5a6845517bc49ccbdbae0268`, using the accepted F1/F2 session prerequisites. |
+| C2 | `mornlea_client_core::presentation`: immutable frame and bounded preparation | Godot adapter, feature families | Accepted F3 at the same source; one epoch/revision per bounded atomic publication. |
+| G1 | `mornlea_godot`: typed bridge, ABI/family negotiation, lifecycle | embedded Python host | Accepted F3 Rust-core producer at the same source; native qualification covers Darwin arm64. Go ABI remains a separate pilot. |
+| V1 | terrain, actors, UI, audio, input and lifecycle semantic families | Godot/Python features P8–P11 | Ten Rust semantic producer families accepted with C2/G1; P8–P11 feature consumers remain separately gated, individually versioned and disableable. |
 | T1 | replay, diagnostics, assets and desktop activation manifests | P12/P13/P14 tooling | Target after the owning runtime contracts; no second authority. |
 
 `S1` and `C1` are *facades*, not blanket plugin interfaces for every gameplay rule. Within an owner, a helper private to one task stays private. A new family changes the register and publishes a small contract packet; it does not widen an untyped `Any` or string-message channel.

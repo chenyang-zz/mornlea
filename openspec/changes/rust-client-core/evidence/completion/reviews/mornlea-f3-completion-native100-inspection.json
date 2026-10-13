@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "contract_sha": "53c88b42016db0da0d1459799c6b301a4e7232a7c4bbe4a8c85afdf4d6f415b1",
+  "iterations_independently_validated": 100,
+  "log_markers_and_error_checks": 100,
+  "same_qualified_artifact_as_retained_boundary": true,
+  "native_sha256": "4f235884d23100862bce473f8656e9eb39c3de7e14f4412482b4b4a1b250b7a1",
+  "godot_sha256": "c7cccbf8fb143e34e02fd6521e09be2c2b974f0d5db080b19071c9c570718ccf",
+  "server_sha256": "49a33ec227fc367031b92c4a98cb8b4fabebb1128115f0d7ab9cb4f3f723a30a",
+  "server": {
+    "deadline_reached": false,
+    "errors": [],
+    "listen": "127.0.0.1:53895",
+    "packets": 82272,
+    "retained_sockets": 0,
+    "retired_connections": 201,
+    "sessions": 200,
+    "source_packets": 82272,
+    "source_sessions": 200,
+    "source_ticks": 11424,
+    "stop_requested": true,
+    "ticks": 11424
+  },
+  "network_policy": {
+    "allowed": true,
+    "denied_loopback": true,
+    "denied_external": true,
+    "denied_ipv6": true,
+    "denied_other_ipv4": true
+  },
+  "static_python_sha256": "a75451c4ca07ad78505ac9cf0221edc0d8b890f148181020ba172d16c56380e5",
+  "initial_cache_count": 1210,
+  "final_cache_count": 1218,
+  "aggregate_report_sha256": "415cc7058157d1af20365820c268a41361fabe7a475bf6212d21b2ef3280bfc3"
+}

@@ -1,6 +1,6 @@
 # F3 Rust client core and Godot bridge implementation
 
-The comprehensive-review code repairs are implemented and independently reviewed at source `8e561c4122e179bd17d4bbf1cb2a730822fd4cd2`. The [repair handoff](review-repair-handoff.md) records passing code gates and the five original qualification nodes still pending below. The [repair packet](plans/08-review-repairs.md) preserves native and real-server acceptance requirements. [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md) and [worker packets](plans/01-client-slices.md) define prerequisites, exact exclusive files, cases and commands. `ledger.md` records accepted contract SHA, fixtures, red/green and scoped commits. The current Go pilot remains explicitly selectable for rollback until the separate product cutover.
+All 52 nodes are complete at runtime source `2cea2020091168ea5a6845517bc49ccbdbae0268`. The [completion handoff](completion-handoff.md) binds independent core, actual-provider/inventory and native/host reviews to complete source-bound Rust, Go, audit, OpenSpec and Darwin runtime gates. Historical code-only and failed qualification rounds remain in `ledger.md` and the retained evidence. The [C1/C2/G1 contract and graph](plans/00-client-contract.md), [typed family schema](plans/02-family-schemas.md), [worker packets](plans/01-client-slices.md), [runtime packet](plans/17-runtime-qualification.md) and [final repair packet](plans/18-completion-review-repairs.md) preserve scope and acceptance. The Go pilot remains explicitly selectable until the separate product cutover.
 
 See the [node-by-node dependency and ownership gate](plans/03-parallel-readiness.md) before dispatch. It refines the linked packets without duplicating status.
 
@@ -50,28 +50,23 @@ See the [cross-change dispatch map](../godot-default-client-switch/plans/00-cros
 - [x] 3.1b Connect the safe Rust core adapter and migrate Godot-callable methods serially.
 - [x] 3.2 Implement symbolic family negotiation and one-session feature host activation.
 - [x] 3.3a Implement core reset, reconnect and close with queued-work invalidation.
-- [ ] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
-- [ ] 3.3c Qualify rebuilt Rust producer artifacts through 100 real headless session cycles.
-- [ ] 3.4 Integrate real F2 Memory/TCP server, C1/C2 and G1 against all accepted families.
+- [x] 3.3b Implement native Godot/Python release ordering and boundary panic containment.
+- [x] 3.3c Qualify rebuilt Rust producer artifacts through 100 real headless session cycles.
+- [x] 3.4 Integrate real F2 Memory/TCP server, C1/C2 and G1 against all accepted families.
 
 ## 4. Closeout
 
-- [ ] 4.1 Reconcile zero-gap inventory, real provider/integration cases and guides.
-- [ ] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
+- [x] 4.1 Reconcile zero-gap inventory, real provider/integration cases and guides.
+- [x] 4.2 Run complete Rust, Go, audit and OpenSpec stage gates on the recorded SHA.
 
 
-## Current execution packet and qualification boundary
+## Completed execution and qualification boundary
 
-The user authorized completion of the outstanding runtime gates on 2026-10-11;
-[17-runtime-qualification.md](plans/17-runtime-qualification.md) is the current
-execution packet. The code-only restrictions below describe the completed prior
-batch. Original checkboxes close only after actual prescribed runtime evidence.
-
-The approved complete code-only scope is detailed in [07-code-only-implementation-handoff.md](plans/07-code-only-implementation-handoff.md). It refines allowed code-level checks without removing original qualification gates. This file remains the sole checkbox/status source. Native Godot marshalling/real bridge checks, 3.3c, 3.4, and full closeout remain pending; any node whose complete prescribed acceptance has not run remains unchecked. Local branch integration and aggregate code checks do not close those gates. The F2 implementation and P8–P14 product work are separately owned.
+The user authorized the outstanding headless runtime gates on 2026-10-11 and completion, global review and local dev merge on 2026-10-13. Packet17 qualification and packet18 repairs now have actual passing prescribed evidence. Original native, real-provider and full-stage criteria were not replaced by code-only checks. The earlier [code-only packet](plans/07-code-only-implementation-handoff.md) and [repair handoff](review-repair-handoff.md) remain historical. F2's separate gameplay executable and P8–P14 product work remain independently owned; production defaults are unchanged.
 
 ## 5. Comprehensive-review repairs
 
-These nodes close the authorized code-repair scope. They do not close the pending original qualification nodes above.
+These nodes closed the earlier code-repair scope. The original qualification nodes above now close with the separate actual runtime evidence in the completion handoff.
 
 - [x] 5.1 Restore exact G1 value schemas, bounded native input conversion and fail-closed host frame admission.
 - [x] 5.2 Repair actual session lifecycle, observation capacity handling, retained bytes, work limits and crafting attribution.
@@ -82,3 +77,10 @@ These nodes close the authorized code-repair scope. They do not close the pendin
 - [x] 5.7 Bound audio provenance history and derive snow cues from actual prediction source facts.
 - [x] 5.8 Compose the real endpoint, confirmed block ownership, input/keepalive output, prediction and all ten families.
 - [x] 5.9 Run repaired provider/integration regressions, independent review and aggregate code gates; reconcile remaining qualification status.
+
+## 6. Completion-review repairs
+
+[18-completion-review-repairs.md](plans/18-completion-review-repairs.md) resolves the original-contract defects found during the user-authorized final global review.
+
+- [x] 6.1 Bound retained live mirrors and suppress stale authoritative source facts before projection.
+- [x] 6.2 Report stable Rust publication failures through bounded host status.
