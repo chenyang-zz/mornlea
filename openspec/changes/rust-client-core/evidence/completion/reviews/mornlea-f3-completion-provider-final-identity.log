@@ -1,0 +1,3 @@
+source_sha=2cea2020091168ea5a6845517bc49ccbdbae0268
+clean_checkout=true
+cargo:rustc-env=MORNLEA_CORE_SOURCE_SHA=2cea2020091168ea5a6845517bc49ccbdbae0268

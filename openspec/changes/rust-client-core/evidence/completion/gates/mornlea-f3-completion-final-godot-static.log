@@ -1,0 +1,29 @@
+scripts/godot/python-check.sh --locked
+Using CPython 3.14.4 interpreter at: apps/mornlea-godot/addons/py4godot/cpython-3.14.4-darwin64/python/bin/python3.14
+Resolved 8 packages in 48ms
+Using CPython 3.14.4 interpreter at: apps/mornlea-godot/addons/py4godot/cpython-3.14.4-darwin64/python/bin/python3.14
+Creating virtual environment at: apps/mornlea-godot/.venv
+Installed 7 packages in 79ms
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.023s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.003s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.009s
+
+OK
+57 files already formatted
+All checks passed!
+Success: no issues found in 57 source files
+Godot Python tooling and runtime-boundary checks passed with the locked development environment.
+scripts/godot/validate-project.sh
+Godot project closure validation passed.
+scripts/godot/capability-check.sh
+Godot capability registry check passed (14 disabled coarse capabilities, 10 rust producer families).

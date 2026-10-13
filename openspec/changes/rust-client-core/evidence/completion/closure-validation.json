@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "runtime_source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "recorded_at": "2026-10-13T03:53:44.647104+00:00",
+  "evidence_origin": "Controller tools executed against the evidence/status/guide-only working diff; summaries below are result records, not raw command output.",
+  "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+  "checks": [
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "pass"
+    },
+    {
+      "command": "go test ./packages/audit -run 'Documentation|ArchitectureTargetDocumentsFoundationAndRollback' -count=1",
+      "exit_code": 0,
+      "result": "pass",
+      "result_summary": "ok github.com/channing771/mornlea/packages/audit 2.536s"
+    },
+    {
+      "command": "openspec validate --all --strict --no-interactive",
+      "exit_code": 0,
+      "result": "pass",
+      "result_summary": "127 passed, 0 failed (127 items)"
+    },
+    {
+      "command": "manifest SHA256/size, exact100 process result/log pairs and52 closed nodes self-check",
+      "exit_code": 0,
+      "result": "pass",
+      "result_summary": "288 retained originals verified before adding this result record"
+    }
+  ],
+  "validated_documents": [
+    {
+      "path": "apps/mornlea-godot/README.md",
+      "sha256": "ca9c2a9a4cee034c81d1ebad84d952c289c67c134539c2c92aa097bb811ca74a"
+    },
+    {
+      "path": "apps/mornlea-godot/README.zh.md",
+      "sha256": "c72950d06bfe9c665e003b24314efd40afe520e07ece155996cfcb33283f3d00"
+    },
+    {
+      "path": "docs/documentation-manifest.json",
+      "sha256": "f457b65aae3eea5a14083dd94fdc1f54f9d9e24f857e646c9c1fc0f1e66e5cdc"
+    },
+    {
+      "path": "docs/runtime-interface-architecture.md",
+      "sha256": "429b6f7feae609de83465f331f021793f6aae8bea1ac43af3dc5685ec9ccd52e"
+    },
+    {
+      "path": "docs/runtime-interface-architecture.zh.md",
+      "sha256": "3c5f234d95591159cc8613e37ec2b086ab79174bfc0d8c594a2cd541b1bd0d5a"
+    },
+    {
+      "path": "openspec/changes/rust-client-core/design.md",
+      "sha256": "e60c8752dcccb40a9078589d83f0e210fed9b9f278f56f03bfe3d2e9871d69e0"
+    },
+    {
+      "path": "openspec/changes/rust-client-core/ledger.md",
+      "sha256": "866db3838abf2dbd4fe5d00671ac535a1c0fd9f7a0bbd6e100adb1c3ce7c86a3"
+    },
+    {
+      "path": "openspec/changes/rust-client-core/proposal.md",
+      "sha256": "cb136f0e50305d059b975cb7fcaa8cf6a5b024c833015431c5cd3b8a38866b84"
+    },
+    {
+      "path": "openspec/changes/rust-client-core/tasks.md",
+      "sha256": "9058fb302fd1dacf71f63c055efda389702fe284bed29e5b558d2205f548cd15"
+    }
+  ],
+  "post_validation_typographical_correction": "Closed the source-SHA code span in design.md; no link, command, behavior or criterion change."
+}

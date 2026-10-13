@@ -1,0 +1,27 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "baseline_sha": "24f57d73c1e1c2132aa5ad3055767fec2628ca35",
+  "unchanged_scopes": [
+    "packages/engine/crates/mornlea_server",
+    "packages/engine/crates/mornlea_protocol",
+    "packages/engine/crates/mornlea_storage",
+    "packages/engine/crates/mornlea_godot/tests/rust_server_integration.rs",
+    "packages/engine/crates/mornlea_godot/tests/support/rust_server.rs",
+    "testdata/runtime-migration/contracts.json"
+  ],
+  "source_comparison_exit": 0,
+  "carried_failure_logs": [
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-stale-agent.log",
+      "sha256": "687c6deb0564c1dc99f2de50bc9c367a1fa9052653aa0eb252d2ce1d27cf69cb",
+      "bytes": 778,
+      "executed_source_sha": "24f57d73c1e1c2132aa5ad3055767fec2628ca35"
+    },
+    {
+      "path": "/private/tmp/mornlea-f3-completion-provider-failed-save.log",
+      "sha256": "882d608240ce254ab68ea7b0f6077f3d14f3ac2d7aaa488754e898cd6c78f526",
+      "bytes": 416,
+      "executed_source_sha": "24f57d73c1e1c2132aa5ad3055767fec2628ca35"
+    }
+  ]
+}

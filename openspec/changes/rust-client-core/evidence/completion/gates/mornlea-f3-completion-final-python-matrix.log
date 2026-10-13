@@ -1,0 +1,39 @@
+patching file 'py4godot/godot_bindings/pythonscript.cpp'
+patching file 'generation_files/generate_py_classes.py'
+patching file 'py4godot/utils/smart_cast.py'
+patching file 'py4godot/cppcore/Variant.cpp'
+Py4Godot hardened runtime materialized: version=4.7-alpha21-mornlea.3 target=darwin-arm64 loader_sha256=bb2e4f7fef9fb7bf10150e80892d91077ec34cd951d722bff220798604b8ef4f artifact_sha256=8da24f2f79d033a88493410930ced3d47161e1963f68b278da0ca07339c3c465
+   Compiling mornlea_godot v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_godot)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.65s
+   Compiling godot-bindings v0.5.5
+   Compiling gdextension-api v0.5.1
+   Compiling proc-macro2 v1.0.107
+   Compiling libc v0.2.189
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling godot-codegen v0.5.5
+   Compiling shlex v2.0.1
+   Compiling nanoserde-derive v0.2.1
+   Compiling jobserver v0.1.35
+   Compiling find-msvc-tools v0.1.11
+   Compiling cc v1.4.3
+   Compiling nanoserde v0.2.1
+   Compiling pkg-config v0.3.34
+   Compiling heck v0.5.0
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling zstd-safe v7.2.4
+   Compiling godot-ffi v0.5.5
+   Compiling godot-core v0.5.5
+   Compiling godot-macros v0.5.5
+   Compiling mornlea_engine v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_engine)
+   Compiling zstd v0.13.3
+   Compiling venial v0.6.1
+   Compiling mornlea_client_core v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_client_core)
+   Compiling godot-cell v0.5.5
+   Compiling glam v0.32.1
+   Compiling mornlea_domain v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_domain)
+   Compiling mornlea_protocol v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_protocol)
+   Compiling godot v0.5.5
+   Compiling mornlea_godot v0.1.0 (/Users/chen/work/mornlea/.worktrees/rust-client-core/packages/engine/crates/mornlea_godot)
+    Finished `release` profile [optimized] target(s) in 2m 41s
+Py4Godot 4.7-alpha21-mornlea.3 qualify offline: upstream=4.7-alpha21 source=d8e17428deeb0428587349b663f6da26cd71ef3a cpython=3.14.4 target=darwin-arm64 cycles=100 exported=macos-app artifact_sha256=8da24f2f79d033a88493410930ced3d47161e1963f68b278da0ca07339c3c465

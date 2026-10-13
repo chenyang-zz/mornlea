@@ -1,0 +1,18 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "ok": true,
+  "matrix_command": [
+    "scripts/godot/python-runtime-check.sh",
+    "--qualify",
+    "--offline"
+  ],
+  "matrix_exit": 0,
+  "matrix_seconds": 337.347,
+  "effective_cycles": 100,
+  "exported": "macos-app",
+  "main_sha256": "15558cb16f7dc65ad59a9bcdf101c142a6f4ace52d9fac0b819fa6e61388eaf6",
+  "loader_sha256": "bb2e4f7fef9fb7bf10150e80892d91077ec34cd951d722bff220798604b8ef4f",
+  "materialized_canonical_artifact": "8da24f2f79d033a88493410930ced3d47161e1963f68b278da0ca07339c3c465",
+  "matrix_log_sha256": "f4384cfc65307c78b05eb7ebe07bd2fbea499f50bdde7f91932a5c7a5c333686",
+  "ledger_sha256": "3cc03f64c010e6a8f823935b8949f1d2a65135d03cdaef3bdf23b64bc9c59188"
+}

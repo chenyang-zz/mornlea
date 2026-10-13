@@ -1,0 +1,23 @@
+.....................E........E................
+======================================================================
+ERROR: test_invalid_publications_report_status_without_retaining_arbitrary_text (test_rust_feature_host.RustFeatureHostTest.test_invalid_publications_report_status_without_retaining_arbitrary_text)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/chen/work/mornlea/.worktrees/rust-client-core/apps/mornlea-godot/tests/unit/test_rust_feature_host.py", line 960, in test_invalid_publications_report_status_without_retaining_arbitrary_text
+    self.assertEqual(self.host.last_rust_failure(), "step:InvalidInput")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'feature_host' object has no attribute 'last_rust_failure'
+
+======================================================================
+ERROR: test_publication_failures_report_bounded_status_and_clear_on_recovery (test_rust_feature_host.RustFeatureHostTest.test_publication_failures_report_bounded_status_and_clear_on_recovery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/chen/work/mornlea/.worktrees/rust-client-core/apps/mornlea-godot/tests/unit/test_rust_feature_host.py", line 939, in test_publication_failures_report_bounded_status_and_clear_on_recovery
+    self.assertEqual(self.host.last_rust_failure(), "")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'feature_host' object has no attribute 'last_rust_failure'
+
+----------------------------------------------------------------------
+Ran 47 tests in 28.339s
+
+FAILED (errors=2)

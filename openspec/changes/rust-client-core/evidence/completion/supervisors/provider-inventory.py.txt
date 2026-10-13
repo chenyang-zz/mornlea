@@ -1,0 +1,84 @@
+from pathlib import Path
+import hashlib,json,re,subprocess
+root=Path('/private/tmp/mornlea-f3-completion-provider-final-review')
+source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+assert source=='2cea2020091168ea5a6845517bc49ccbdbae0268'
+path='testdata/runtime-migration/client/capability-inventory.json'
+j=json.loads((root/path).read_text())
+refs=set()
+for group in ('families','actions','packet_variants','oracles','limits','rows'):
+ for row in j[group]:
+  refs.update(row.get('rust_tests',[]))
+  values=row.get('rust_test',[])
+  refs.update([values] if isinstance(values,str) else values)
+assert len(j['rows'])==len({r['id'] for r in j['rows']})==67
+assert [len(j[k]) for k in ('families','actions','packet_variants','oracles','limits')]==[10,20,36,28,41]
+assert len(refs)==151
+assert all(row.get('rust_test') for row in j['rows'])
+assert all(row.get('rust_tests') for k in ('families','actions','packet_variants','oracles','limits') for row in j[k])
+discovered={}
+for crate,label in [('mornlea_client_core','core'),('mornlea_godot','godot'),('mornlea_protocol','protocol')]:
+ text=Path('/private/tmp/mornlea-f3-completion-provider-final-'+label+'-list.log').read_text()
+ target=None
+ for line in text.splitlines():
+  match=re.search(r'Running tests/([a-z_]+)\.rs',line)
+  if match:
+   target=match.group(1);discovered[(crate,target)]=set()
+  if target and line.endswith(': test'):discovered[(crate,target)].add(line.removesuffix(': test'))
+missing=[]
+for ref in sorted(refs):
+ crate,target,name=ref.split('::',2)
+ if name not in discovered.get((crate,target),set()):missing.append(ref)
+assert not missing,missing
+historical=[]
+base=json.loads(subprocess.check_output(['git','show','24f57d73c1e1c2132aa5ad3055767fec2628ca35:'+path],cwd=root,text=True))
+assert j['notes']==base['notes']
+append_rows=[]
+for group in ('families','actions','packet_variants','oracles','limits','rows'):
+ for old,new in zip(base[group],j[group]):
+  for field in ('rust_test','rust_tests'):
+   ov=old.get(field);nv=new.get(field)
+   if ov==nv:continue
+   assert isinstance(ov,list) and isinstance(nv,list) and nv[:len(ov)]==ov
+   assert all('::freshness_' in r for r in nv[len(ov):])
+   append_rows.append((group,new.get('id',new.get('key',new.get('packet','?'))),nv[len(ov):]))
+expected_limits={'hostile_mirror_capacity','passive_mirror_capacity','projectile_mirror_capacity','companion_active_capacity','session_drop_capacity'}
+assert {r for g,r,v in append_rows if g=='limits'}==expected_limits
+assert {r for g,r,v in append_rows if g=='families'}=={'input@1','actors@1','player-view@1','world-ui@1'}
+assert len([r for g,r,v in append_rows if g=='packet_variants'])==17
+assert len([r for g,r,v in append_rows if g=='rows'])==21
+flat={r['id']:r for r in j['rows']}
+for family in j['families']:assert flat[family['key']]['rust_test']==family['rust_tests']
+for packet in j['packet_variants']:
+ phase=packet['session_phase'].lower()
+ key='packet.'+phase+'.'+packet['packet']
+ assert flat[key]['rust_test']==packet['rust_tests'],key
+
+def strip(v):
+ if isinstance(v,dict):return {k:strip(x) for k,x in v.items() if k not in ('rust_test','rust_tests','notes')}
+ if isinstance(v,list):return [strip(x) for x in v]
+ return v
+for revision in ('908a099282a1ad35736d0ce7ba17abcb089299a8','f58a86d39'):
+ old=json.loads(subprocess.check_output(['git','show',revision+':'+path],cwd=root,text=True))
+ assert j['seal']==old['seal'] and strip(j)==strip(old)
+ assert all(note in j['notes'] for note in old['notes'])
+ historical.append(revision)
+raw=subprocess.check_output(['git','show',j['seal']['baseline_sha']+':testdata/runtime-migration/contracts.json'],cwd=root)
+assert 'sha256:'+hashlib.sha256(raw).hexdigest()==j['seal']['prerequisite_verification']['corpus_file_sha256']
+sealed=json.loads(raw);current=json.loads((root/'testdata/runtime-migration/contracts.json').read_text());changes=[]
+def compare(a,b,path):
+ if isinstance(a,dict):
+  assert a.keys()==b.keys()
+  if a.get('sha256')!=b.get('sha256') and 'path' in b:
+   assert b['sha256']=='sha256:'+hashlib.sha256((root/b['path']).read_bytes()).hexdigest(),b['path']
+  for k in a:compare(a[k],b[k],path+'.'+k)
+ elif isinstance(a,list):
+  assert len(a)==len(b)
+  for i,(x,y) in enumerate(zip(a,b)):compare(x,y,path+f'[{i}]')
+ elif a!=b:changes.append(path)
+compare(sealed,current,'corpus')
+assert len(changes)==12 and all(path.endswith('.sha256') for path in changes)
+assert sealed['cases']==current['cases'] and len(current['cases'])==1434
+assert sealed['identities']==current['identities'] and sealed['source_revision']==current['source_revision']
+result={'source_sha':source,'rows':67,'families':10,'actions':20,'packet_variants':36,'oracles':28,'limits':41,'rust_references':151,'missing':missing,'discovered':{crate+'::'+target:len(names) for (crate,target),names in discovered.items()},'historical_preserved':historical,'sealed_cases':1434,'changed_source_hash_leaves':changes,'append_only_rows':[{'group':g,'row':r,'added':v} for g,r,v in append_rows]}
+print(json.dumps(result,indent=2))

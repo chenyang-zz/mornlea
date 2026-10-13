@@ -1,0 +1,2152 @@
+{
+  "schema_version": 1,
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "base_sha": "24f57d73c1e1c2132aa5ad3055767fec2628ca35",
+  "recorded_at": "2026-10-13T03:51:34.389459+00:00",
+  "contract_sha256": "53c88b42016db0da0d1459799c6b301a4e7232a7c4bbe4a8c85afdf4d6f415b1",
+  "reviewers": [
+    "Codex /root/review_core",
+    "Codex /root/review_provider",
+    "Codex /root/review_native"
+  ],
+  "source_scope": "Runtime, contracts, tests and capability inventory frozen at source_sha; closure changes are evidence/status and synchronized guides only.",
+  "commands": [
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "make rust",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-build.log",
+      "elapsed_seconds": 57.002
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "make rust-check",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-check.log",
+      "elapsed_seconds": 879.933
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "make dev-check",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-dev-check.log",
+      "elapsed_seconds": 1088.902
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "make test-race",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-test-race.log",
+      "elapsed_seconds": 1573.12
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "go test ./packages/audit -count=1",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-audit.log",
+      "elapsed_seconds": 153.054
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "scripts/godot/smoke.sh --iterations 100 --isolated-python --core rust --exercise-session",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-session100.log",
+      "elapsed_seconds": 753.6
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "scripts/godot/python-runtime-check.sh --qualify --offline",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-python-matrix.log",
+      "elapsed_seconds": 337.347
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "make godot-python-check godot-project-check godot-capability-check",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-godot-static.log",
+      "elapsed_seconds": 11.255
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "openspec validate --all --strict --no-interactive",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-openspec.log",
+      "elapsed_seconds": 2.007
+    },
+    {
+      "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+      "command": "python3 /private/tmp/mornlea-f3-completion-native-bridge.py",
+      "exit_code": 0,
+      "result": "pass",
+      "evidence": "evidence/completion/native-boundary/supervisor.log"
+    }
+  ],
+  "rust_summaries": [
+    {
+      "command": "make rust-check",
+      "rust_test_summaries": 86,
+      "rust_passed": 4707,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "make dev-check",
+      "rust_test_summaries": 86,
+      "rust_passed": 4707,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "native100": {
+    "iterations": 100,
+    "separate_processes": 100,
+    "server_sessions": 200,
+    "retained_sockets": 0,
+    "errors": [],
+    "scope": "Darwin arm64, Py4Godot 4.7-alpha21-mornlea.3"
+  },
+  "artifacts": [
+    {
+      "path": "gates/mornlea-f3-completion-final-rust-results.json",
+      "origin": "/private/tmp/mornlea-f3-completion-final-rust-results.json",
+      "kind": "current-source-stage",
+      "bytes": 908,
+      "sha256": "3c08ffb58f1960adbd9c4e92cc24d19e23e8847307ed7dd62479bfbddb18e06d"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-rust-build.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-rust-build.log",
+      "kind": "current-source-stage",
+      "bytes": 1342,
+      "sha256": "43d76be068f26f46ae23b81c81b81d5df773e7dd3f5d7981d3ce3989b681667a"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-rust-check.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-rust-check.log",
+      "kind": "current-source-stage",
+      "bytes": 392452,
+      "sha256": "a767c34057eee98c750f837421e5988d5f90b473e08a6632d81d6c86b9008ff7"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-dev-check.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-dev-check.log",
+      "kind": "current-source-stage",
+      "bytes": 395091,
+      "sha256": "0808d795ff5ebb7b5cda89a2b0c7f30f29eca1ab289f381436956511bea2f0e8"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-go-results.json",
+      "origin": "/private/tmp/mornlea-f3-completion-final-go-results.json",
+      "kind": "current-source-stage",
+      "bytes": 743,
+      "sha256": "4a5f928f614b42e67d331ce79dc1899c77805d30f9cfcadf40129ace1fe7e3eb"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-test-race.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-test-race.log",
+      "kind": "current-source-stage",
+      "bytes": 4744,
+      "sha256": "0a95401ab11dcb277ab6bdba53cfa5e1cc424f7f24e08fcb4ef62582afb822ec"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-audit.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-audit.log",
+      "kind": "current-source-stage",
+      "bytes": 60,
+      "sha256": "2617873446e0339fd68df607568f4c7a2419d1a9df7f7181fbe04752574b9370"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-native-results.json",
+      "origin": "/private/tmp/mornlea-f3-completion-final-native-results.json",
+      "kind": "current-source-stage",
+      "bytes": 895,
+      "sha256": "3cc03f64c010e6a8f823935b8949f1d2a65135d03cdaef3bdf23b64bc9c59188"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-session100.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-session100.log",
+      "kind": "current-source-stage",
+      "bytes": 12592,
+      "sha256": "7c1654ac82684d4a0f5c5f9708073e9049fb961f9346a230a1d8833b92f1871f"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-python-matrix.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-python-matrix.log",
+      "kind": "current-source-stage",
+      "bytes": 2399,
+      "sha256": "f4384cfc65307c78b05eb7ebe07bd2fbea499f50bdde7f91932a5c7a5c333686"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-static-results.json",
+      "origin": "/private/tmp/mornlea-f3-completion-final-static-results.json",
+      "kind": "current-source-stage",
+      "bytes": 852,
+      "sha256": "bf5f6863e1c7a99f5752f45d9eb4d4bf6fdff07991692bee1448f19a4352c8a2"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-godot-static.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-godot-static.log",
+      "kind": "current-source-stage",
+      "bytes": 1095,
+      "sha256": "871ef969e01dc43b8ba7dc952c78078b26116279bd4ee9f8b59f0bd30250061b"
+    },
+    {
+      "path": "gates/mornlea-f3-completion-final-openspec.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-openspec.log",
+      "kind": "current-source-stage",
+      "bytes": 4037,
+      "sha256": "2f748f8fb4f3f06733fc54bca5bab90bcc3c08e3e4e8884ed7019009a83da2a8"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-core-final-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-review.md",
+      "kind": "independent-current-source-review",
+      "bytes": 11739,
+      "sha256": "ec5022901e86dc49177e7815d7fb10439858e4080352095191433de218719a93"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-core-final-tests.log",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-tests.log",
+      "kind": "independent-current-source-review",
+      "bytes": 34822,
+      "sha256": "fdd5e2722af13ab65a7cb65f5275114de134a70daac0b1fe6121bcac875e324c"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-core-final-focused.log",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-focused.log",
+      "kind": "independent-current-source-review",
+      "bytes": 1527,
+      "sha256": "33ac25f365f9f4097696040979ba044b6a2f1a7022c7120f258f420e18d25ca2"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-core-final-original-probes.log",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-original-probes.log",
+      "kind": "independent-current-source-review",
+      "bytes": 1924,
+      "sha256": "a1de1113af1fe7056bdca922c2cccb0fd59eb39616fe907d2bcb72cf3c431172"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-core-final-probes.log",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-probes.log",
+      "kind": "independent-current-source-review",
+      "bytes": 1045,
+      "sha256": "6a17af58901c2104781407f661f40cfac7362fff17f9d7a4cf7a523360dba764"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-review.md",
+      "kind": "independent-current-source-review",
+      "bytes": 13843,
+      "sha256": "48d83d3a3dfdcd9509822b902074ec6ebcc782b60181f6377f9e8d7e18d71ca0"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-evidence.json",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-evidence.json",
+      "kind": "independent-current-source-review",
+      "bytes": 2296,
+      "sha256": "7eeb7d6ff96fa36c1df1cb8f7b60adb0cacfc003afabb30aa044efc324d984cc"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-carry.json",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-carry.json",
+      "kind": "independent-current-source-review",
+      "bytes": 1085,
+      "sha256": "656c04eb931f04748396561b44bddcf9222e52f28bc31d98b77a385963b0f085"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-tests.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-tests.log",
+      "kind": "independent-current-source-review",
+      "bytes": 8149,
+      "sha256": "de68bdf0503a7804b7e6efae5d6d7bc70b035c6202fd847d25abe4663a01f3d5"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-freshness.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-freshness.log",
+      "kind": "independent-current-source-review",
+      "bytes": 1671,
+      "sha256": "3ef2b6033932c720ab6fba13276f4949b9e01c379cf0872a3bca020d7c31c9e2"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-inventory.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-inventory.log",
+      "kind": "independent-current-source-review",
+      "bytes": 20547,
+      "sha256": "6b9ea425a108316a0a9036dec46a00b6e369d19865778016b827e613e66b0fa7"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-core-list.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-core-list.log",
+      "kind": "independent-current-source-review",
+      "bytes": 26776,
+      "sha256": "1e4afa1af0e98397e65ed0818544f941068eaf65660a156d580c6bb314a83152"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-godot-list.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-godot-list.log",
+      "kind": "independent-current-source-review",
+      "bytes": 6420,
+      "sha256": "a58dcc14d767103f4dc7b854419f737a12d7b45df3bb387c0beeaacf794f86df"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-protocol-list.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-protocol-list.log",
+      "kind": "independent-current-source-review",
+      "bytes": 8419,
+      "sha256": "4450867b6aedb8e4eaeff339c88fa416d33ffc90ce50076f394d16697797991b"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-provider-final-identity.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-identity.log",
+      "kind": "independent-current-source-review",
+      "bytes": 153,
+      "sha256": "18afa81b04aba36813165cf6d2a332d50b2f1a8153829ae7fda513f1c7d0934e"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-native-final-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-native-final-review.md",
+      "kind": "independent-current-source-review",
+      "bytes": 16096,
+      "sha256": "5179301d2a57c90a7351db603f2a60d711ff87ab6969af021845f0fe0170fcf3"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-native-final-host.log",
+      "origin": "/private/tmp/mornlea-f3-completion-native-final-host.log",
+      "kind": "independent-current-source-review",
+      "bytes": 8175,
+      "sha256": "f75a1d0134396203c983584e32e5d0444c6ca3a9d3cb1b0e5e64326916a067a0"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-native-final-adapter.log",
+      "origin": "/private/tmp/mornlea-f3-completion-native-final-adapter.log",
+      "kind": "independent-current-source-review",
+      "bytes": 8545,
+      "sha256": "0bc768311d09f22c5cab034264ba6158db81375f81a853dbbbc323fb5e91a7dd"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-native-final-identity.json",
+      "origin": "/private/tmp/mornlea-f3-completion-native-final-identity.json",
+      "kind": "independent-current-source-review",
+      "bytes": 4096,
+      "sha256": "80a1ec70170399ff2805e83023e836f0819189e1fd9d81b64debe2d6c805ddf5"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-native100-inspection.json",
+      "origin": "/private/tmp/mornlea-f3-completion-native100-inspection.json",
+      "kind": "independent-current-source-review",
+      "bytes": 1309,
+      "sha256": "df3b1330dadeff22df04e3e69dc4f6073d7f46f57fbbc494864de8ac00f6c069"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-matrix-inspection.json",
+      "origin": "/private/tmp/mornlea-f3-completion-matrix-inspection.json",
+      "kind": "independent-current-source-review",
+      "bytes": 740,
+      "sha256": "b9957fccd610c241e239aabc255027fb0dfc255adc89a42c370a6aee0150d85f"
+    },
+    {
+      "path": "history/mornlea-f3-completion-core-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-core-review.md",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 14866,
+      "sha256": "e4cd0c724f73af83bb4148365d0f733a39488d8cd903de9d4c4f0b8f94cb78aa"
+    },
+    {
+      "path": "history/mornlea-f3-completion-native-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-native-review.md",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 10024,
+      "sha256": "77350c7d5d2d7af7399c4988788ef43bc586b5c87b612fc5f07c17e621c3cebc"
+    },
+    {
+      "path": "history/mornlea-f3-completion-provider-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-review.md",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 15297,
+      "sha256": "836230a947a1cd109d66c67034b16b507c0b0b533f27957b31df79283a591e1e"
+    },
+    {
+      "path": "history/mornlea-f3-completion-core-repair.md",
+      "origin": "/private/tmp/mornlea-f3-completion-core-repair.md",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 10990,
+      "sha256": "d536cfc801af6af2cada653d703e558c12fde7370c388203611568d90fb0a42a"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-rereview.md",
+      "origin": "/private/tmp/mornlea-f3-completion-host-rereview.md",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 6005,
+      "sha256": "c8f3d404011ace66828eb9cd76d43150a28d7bdbf884f1a47f6d59739a8d2c41"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-status-probe.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-status-probe.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 881,
+      "sha256": "94d2bf6b734ea18a56799f1613458734d82450086b5e4a1d5503607c7accee97"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-red.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-red.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 1692,
+      "sha256": "1729b4002c4c02356f397665304e8d23221175f366e4aa8a70f0aa6b21e6c20b"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-copy-red.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-copy-red.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 882,
+      "sha256": "aa3356666fbaa413855fb369219c693834c8eb00a0585e32e559bd09e7191a7a"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-green-v2.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-green-v2.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 148,
+      "sha256": "3044fd07f64578d539477e56e35afc6c05a7824c7dbfe6ec71278a4034e2c9dc"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-regressions-final.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-regressions-final.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 101,
+      "sha256": "372ee57a30b8a8b17bb056a0814266786a922da7dcf4139f4f9a2457745d6424"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-rereview-unit.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-rereview-unit.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 8175,
+      "sha256": "5ba4ac20b1a9e3f446fa9bbda165a0f27bcda7b103ea6fc65083e070b611d091"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-rereview-format.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-rereview-format.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 26,
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-rereview-lint.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-rereview-lint.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "history/mornlea-f3-completion-host-rereview-mypy.log",
+      "origin": "/private/tmp/mornlea-f3-completion-host-rereview-mypy.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 43,
+      "sha256": "f9b031e5c45aa702cd4fef028d465551cb20a2c4698e0913c7b00766b20ac4d8"
+    },
+    {
+      "path": "history/mornlea-f3-completion-provider-failed-save.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-failed-save.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 416,
+      "sha256": "882d608240ce254ab68ea7b0f6077f3d14f3ac2d7aaa488754e898cd6c78f526"
+    },
+    {
+      "path": "history/mornlea-f3-completion-provider-stale-agent.log",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-stale-agent.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 778,
+      "sha256": "687c6deb0564c1dc99f2de50bc9c367a1fa9052653aa0eb252d2ce1d27cf69cb"
+    },
+    {
+      "path": "history/mornlea-f3-completion-provider-evidence.json",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-evidence.json",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 2237,
+      "sha256": "814a9d6a477fc044c5b8a557522c77dfb90b04c52b853b34d4a2c5b0e4514f2e"
+    },
+    {
+      "path": "history/mornlea-f3-completion-dev-check.log",
+      "origin": "/private/tmp/mornlea-f3-completion-dev-check.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 89,
+      "sha256": "753d9693c8bdd081af6b51909eaf40b35eb98c078c0861e056c69997413c9dec"
+    },
+    {
+      "path": "history/mornlea-f3-completion-generator-repro.log",
+      "origin": "/private/tmp/mornlea-f3-completion-generator-repro.log",
+      "kind": "historical-repair-or-byte-identical-carry",
+      "bytes": 82,
+      "sha256": "b6205ede9b3b29247f0c78e5c783a3f3fc7bef7476af3705daf12070924ac650"
+    },
+    {
+      "path": "history/mornlea-core-repair-clippy-final.log",
+      "origin": "/private/tmp/mornlea-core-repair-clippy-final.log",
+      "kind": "historical-core-repair",
+      "bytes": 193,
+      "sha256": "e8d3fabd3f18da3a147914b37b6dcbcfdb7a5383b6405030b2d492dbfd849443"
+    },
+    {
+      "path": "history/mornlea-core-repair-clippy.log",
+      "origin": "/private/tmp/mornlea-core-repair-clippy.log",
+      "kind": "historical-core-repair",
+      "bytes": 628,
+      "sha256": "e5a4672eb9e36d5e1ba9bd57628c7146c09ef4d3f1dea778d109627befa5f292"
+    },
+    {
+      "path": "history/mornlea-core-repair-commit.log",
+      "origin": "/private/tmp/mornlea-core-repair-commit.log",
+      "kind": "historical-core-repair",
+      "bytes": 1171,
+      "sha256": "bc4fb25a973edf44fde9df30bea402bec9ea36ffa20c88fa104c78836f87d614"
+    },
+    {
+      "path": "history/mornlea-core-repair-diff-check.log",
+      "origin": "/private/tmp/mornlea-core-repair-diff-check.log",
+      "kind": "historical-core-repair",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "history/mornlea-core-repair-fmt-final.log",
+      "origin": "/private/tmp/mornlea-core-repair-fmt-final.log",
+      "kind": "historical-core-repair",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "history/mornlea-core-repair-fmt.log",
+      "origin": "/private/tmp/mornlea-core-repair-fmt.log",
+      "kind": "historical-core-repair",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "history/mornlea-core-repair-focused.log",
+      "origin": "/private/tmp/mornlea-core-repair-focused.log",
+      "kind": "historical-core-repair",
+      "bytes": 1255,
+      "sha256": "2d1a9725ae5fad9871bbef413334431fa052d3401136f53ee129479d07297150"
+    },
+    {
+      "path": "history/mornlea-core-repair-green-final.log",
+      "origin": "/private/tmp/mornlea-core-repair-green-final.log",
+      "kind": "historical-core-repair",
+      "bytes": 34415,
+      "sha256": "a13aa01bb8650955eea9fe16d8084c906e3070291a5df41e610e56a593dedc8e"
+    },
+    {
+      "path": "history/mornlea-core-repair-green-first.log",
+      "origin": "/private/tmp/mornlea-core-repair-green-first.log",
+      "kind": "historical-core-repair",
+      "bytes": 29999,
+      "sha256": "369b67aea3b5ebff3e54e56bbc128bfbcc4bc58a67b24d38a92f94650b1edb09"
+    },
+    {
+      "path": "history/mornlea-core-repair-green.log",
+      "origin": "/private/tmp/mornlea-core-repair-green.log",
+      "kind": "historical-core-repair",
+      "bytes": 34415,
+      "sha256": "46f203b0a0b1effa664e2436a0cdf1e2ab6a9c7f37bbf0d1afe09a732a083d47"
+    },
+    {
+      "path": "history/mornlea-core-repair-projection.log",
+      "origin": "/private/tmp/mornlea-core-repair-projection.log",
+      "kind": "historical-core-repair",
+      "bytes": 17678,
+      "sha256": "ccdcc94ec4f8babf169af5d00ae8ff9c957337cc32e39e329f031a631063c861"
+    },
+    {
+      "path": "history/mornlea-core-repair-red.log",
+      "origin": "/private/tmp/mornlea-core-repair-red.log",
+      "kind": "historical-core-repair",
+      "bytes": 4988,
+      "sha256": "fb2d945c6fcad20e9eb8576828ae5140380796e0bd956e8eb3c2532b5cd343a5"
+    },
+    {
+      "path": "history/mornlea-core-repair-session.log",
+      "origin": "/private/tmp/mornlea-core-repair-session.log",
+      "kind": "historical-core-repair",
+      "bytes": 7062,
+      "sha256": "25d07df02e088e80b78bf88f78ddd2adee2e20aaf30e60b4c3a52f5fbc0e7734"
+    },
+    {
+      "path": "native100/iteration-1.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-1.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-1.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-1.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-10.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-10.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-10.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-10.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-100.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-100.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-100.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-100.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-11.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-11.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-11.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-11.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-12.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-12.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-12.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-12.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-13.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-13.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-13.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-13.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-14.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-14.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-14.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-14.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-15.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-15.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-15.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-15.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-16.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-16.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-16.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-16.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-17.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-17.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-17.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-17.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-18.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-18.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-18.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-18.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-19.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-19.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-19.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-19.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-2.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-2.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-2.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-2.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-20.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-20.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-20.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-20.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-21.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-21.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-21.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-21.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-22.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-22.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-22.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-22.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-23.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-23.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-23.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-23.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-24.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-24.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-24.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-24.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-25.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-25.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-25.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-25.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-26.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-26.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-26.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-26.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-27.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-27.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-27.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-27.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-28.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-28.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-28.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-28.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-29.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-29.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-29.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-29.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-3.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-3.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-3.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-3.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-30.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-30.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-30.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-30.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-31.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-31.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-31.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-31.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-32.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-32.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-32.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-32.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-33.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-33.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-33.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-33.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-34.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-34.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-34.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-34.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-35.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-35.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-35.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-35.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-36.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-36.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-36.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-36.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-37.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-37.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-37.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-37.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-38.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-38.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-38.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-38.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-39.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-39.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-39.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-39.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-4.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-4.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-4.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-4.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-40.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-40.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-40.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-40.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-41.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-41.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-41.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-41.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-42.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-42.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-42.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-42.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-43.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-43.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-43.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-43.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-44.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-44.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-44.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-44.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-45.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-45.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-45.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-45.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-46.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-46.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-46.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-46.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-47.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-47.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-47.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-47.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-48.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-48.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-48.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-48.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-49.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-49.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-49.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-49.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-5.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-5.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-5.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-5.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-50.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-50.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-50.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-50.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-51.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-51.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-51.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-51.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-52.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-52.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-52.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-52.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-53.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-53.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-53.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-53.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-54.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-54.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-54.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-54.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-55.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-55.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-55.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-55.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-56.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-56.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-56.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-56.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-57.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-57.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-57.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-57.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-58.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-58.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-58.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-58.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-59.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-59.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-59.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-59.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-6.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-6.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-6.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-6.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-60.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-60.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-60.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-60.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-61.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-61.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-61.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-61.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-62.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-62.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-62.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-62.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-63.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-63.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-63.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-63.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-64.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-64.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-64.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-64.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-65.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-65.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-65.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-65.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-66.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-66.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-66.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-66.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-67.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-67.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-67.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-67.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-68.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-68.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-68.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-68.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-69.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-69.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-69.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-69.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-7.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-7.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-7.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-7.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-70.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-70.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-70.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-70.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-71.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-71.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-71.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-71.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-72.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-72.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-72.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-72.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-73.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-73.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-73.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-73.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-74.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-74.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-74.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-74.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-75.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-75.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-75.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-75.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-76.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-76.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-76.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-76.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-77.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-77.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-77.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-77.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-78.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-78.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-78.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-78.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-79.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-79.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-79.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-79.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-8.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-8.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-8.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-8.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-80.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-80.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-80.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-80.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-81.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-81.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-81.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-81.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-82.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-82.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-82.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-82.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-83.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-83.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-83.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-83.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-84.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-84.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-84.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-84.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-85.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-85.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-85.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-85.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-86.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-86.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-86.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-86.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-87.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-87.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-87.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-87.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-88.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-88.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-88.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-88.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-89.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-89.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-89.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-89.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-9.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-9.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-9.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-9.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-90.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-90.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-90.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-90.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-91.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-91.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-91.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-91.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-92.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-92.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-92.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-92.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-93.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-93.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-93.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-93.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-94.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-94.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-94.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-94.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-95.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-95.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-95.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-95.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-96.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-96.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-96.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-96.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-97.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-97.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-97.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-97.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-98.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-98.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-98.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-98.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/iteration-99.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-99.json",
+      "kind": "current-source-native100",
+      "bytes": 311,
+      "sha256": "a332e8519be7dba76bb0c11bf332d679cbba897b7cddd70c85dd5c81fcc92506"
+    },
+    {
+      "path": "native100/iteration-99.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/iteration-99.log",
+      "kind": "current-source-native100",
+      "bytes": 1659,
+      "sha256": "52e3058677218a9cb141fcf718c4885b30ce49c81e2fe5a1813ec48ada4dd5a0"
+    },
+    {
+      "path": "native100/network-allowed.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network-allowed.log",
+      "kind": "current-source-native100",
+      "bytes": 10,
+      "sha256": "77ff73618d165c9ca1d50b611d88c747261b55161020c066fe445f3bd4083832"
+    },
+    {
+      "path": "native100/network-denied_external.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network-denied_external.log",
+      "kind": "current-source-native100",
+      "bytes": 8,
+      "sha256": "f5105fb339a6ea474dd3a136e80d60375a169b03ff8cd6786930ff70e249a988"
+    },
+    {
+      "path": "native100/network-denied_ipv6.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network-denied_ipv6.log",
+      "kind": "current-source-native100",
+      "bytes": 8,
+      "sha256": "f5105fb339a6ea474dd3a136e80d60375a169b03ff8cd6786930ff70e249a988"
+    },
+    {
+      "path": "native100/network-denied_loopback.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network-denied_loopback.log",
+      "kind": "current-source-native100",
+      "bytes": 8,
+      "sha256": "f5105fb339a6ea474dd3a136e80d60375a169b03ff8cd6786930ff70e249a988"
+    },
+    {
+      "path": "native100/network-denied_other_ipv4.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network-denied_other_ipv4.log",
+      "kind": "current-source-native100",
+      "bytes": 8,
+      "sha256": "f5105fb339a6ea474dd3a136e80d60375a169b03ff8cd6786930ff70e249a988"
+    },
+    {
+      "path": "native100/network.sb",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/network.sb",
+      "kind": "current-source-native100",
+      "bytes": 101,
+      "sha256": "06070c1b92dfbbaeaca3b5347201426701352888cdeb9549e9ce9d42e38a870a"
+    },
+    {
+      "path": "native100/report.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/report.json",
+      "kind": "current-source-native100",
+      "bytes": 368414,
+      "sha256": "415cc7058157d1af20365820c268a41361fabe7a475bf6212d21b2ef3280bfc3"
+    },
+    {
+      "path": "native100/server.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/server.json",
+      "kind": "current-source-native100",
+      "bytes": 294,
+      "sha256": "ed672bd0c916687296a1e5fc50c740fdf6f79ceaaa32ea734be24d9c8105f50b"
+    },
+    {
+      "path": "native100/server.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.6mldydr8/server.log",
+      "kind": "current-source-native100",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native-boundary/report.json",
+      "origin": "/private/tmp/mornlea-f3-completion-native-bridge.wp37d6z2/report.json",
+      "kind": "current-source-native-boundary",
+      "bytes": 162788,
+      "sha256": "488aa70f29b4f292776699ae49ba909138341f5af9c9411bc2943fa5ac893141"
+    },
+    {
+      "path": "native-boundary/import.log",
+      "origin": "/private/tmp/mornlea-f3-completion-native-bridge.wp37d6z2/import.log",
+      "kind": "current-source-native-boundary",
+      "bytes": 6220,
+      "sha256": "f411554456c19ee26d8e0757b2c7bcdfb86329a4fc44e0cf8869a8822bd977cf"
+    },
+    {
+      "path": "native-boundary/boundary.log",
+      "origin": "/private/tmp/mornlea-f3-completion-native-bridge.wp37d6z2/boundary.log",
+      "kind": "current-source-native-boundary",
+      "bytes": 1576,
+      "sha256": "b61326308e1976b5c6c71d2c16926bcb3d9513109f7a30f2bf54c09e47f5d2d2"
+    },
+    {
+      "path": "native-boundary/supervisor.log",
+      "origin": "/private/tmp/mornlea-f3-completion-final-native-bridge.log",
+      "kind": "current-source-native-boundary",
+      "bytes": 83,
+      "sha256": "2acdb895e39343706126bd6ec88f1cd0a86dd7f7c643a18a3db8936dfb7a3bfb"
+    },
+    {
+      "path": "history/native100-failure/report.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.g2vuqdzp/report.json",
+      "kind": "historical-failed-native100",
+      "bytes": 165743,
+      "sha256": "f1d4f83019b5a8b8de194ae38e4b9cc33dd2a0a29e5ea942f098822182c10ac9"
+    },
+    {
+      "path": "history/native100-failure/iteration-12.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.g2vuqdzp/iteration-12.log",
+      "kind": "historical-failed-native100",
+      "bytes": 1811,
+      "sha256": "1f25f1b58ba81c64c7fb19b911fb7817fa5667800a48b62ea469b243b765c4f6"
+    },
+    {
+      "path": "history/native100-failure/iteration-12.json",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.g2vuqdzp/iteration-12.json",
+      "kind": "historical-failed-native100",
+      "bytes": 250,
+      "sha256": "0416391e77fc3094f7fd6932566d7e099da5dcd8826c198c452e87efc9a12758"
+    },
+    {
+      "path": "history/native100-failure/server.log",
+      "origin": "/private/tmp/mornlea-rust-session-smoke.g2vuqdzp/server.log",
+      "kind": "historical-failed-native100",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "supervisors/final-stage.py.txt",
+      "origin": "/private/tmp/mornlea-f3-completion-final-stage.py",
+      "kind": "historical-read-only-supervisor-or-probe",
+      "bytes": 2684,
+      "sha256": "3a466d0464ec05c76d4d1219a1d8d53fa59d32ada6a8f28e21580038073bb21b"
+    },
+    {
+      "path": "supervisors/native-bridge.py.txt",
+      "origin": "/private/tmp/mornlea-f3-completion-native-bridge.py",
+      "kind": "historical-read-only-supervisor-or-probe",
+      "bytes": 2673,
+      "sha256": "f97996227e627ef0295d33f7e30d45e4bfd21886f21967c14723c604ea9f9bb1"
+    },
+    {
+      "path": "supervisors/host-status-probe.py.txt",
+      "origin": "/private/tmp/mornlea-f3-completion-host-status-probe.py",
+      "kind": "historical-read-only-supervisor-or-probe",
+      "bytes": 2878,
+      "sha256": "fd88f411704c3b3b9717897b5761418ed310e1a7a846ae78ac6c56870cf37b31"
+    },
+    {
+      "path": "supervisors/core-probe.rs.txt",
+      "origin": "/private/tmp/mornlea-f3-completion-core-final-probe/tests/probe.rs",
+      "kind": "historical-read-only-supervisor-or-probe",
+      "bytes": 10071,
+      "sha256": "8fe351d23e88cefaf32e69c09f4d3cddaad16b202043b85bb99ab0975f253a82"
+    },
+    {
+      "path": "supervisors/provider-inventory.py.txt",
+      "origin": "/private/tmp/mornlea-f3-completion-provider-final-inventory.py",
+      "kind": "historical-read-only-supervisor-or-probe",
+      "bytes": 5054,
+      "sha256": "925107902226beec91263f3db9689b60da68db24eb4cd48b2cb5e9fe79ef848b"
+    },
+    {
+      "path": "closure-validation.json",
+      "origin": "controller tool-result record",
+      "kind": "evidence-status-guide-validation",
+      "bytes": 2740,
+      "sha256": "2746cc0ca2f040e00795e2f976eb46ceadbd70b8373bd6c87baf3fc1ee7ab5ab"
+    },
+    {
+      "path": "reviews/mornlea-f3-completion-closeout-review.md",
+      "origin": "/private/tmp/mornlea-f3-completion-closeout-review.md",
+      "kind": "independent-evidence-status-guide-review",
+      "bytes": 8050,
+      "sha256": "9997587b6003e8ffba0b0563592748affaa203c173c21e5568a9acc5adb25677"
+    }
+  ],
+  "closure_checks": "closure-validation.json",
+  "closure_review": "reviews/mornlea-f3-completion-closeout-review.md"
+}

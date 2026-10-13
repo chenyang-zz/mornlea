@@ -1,0 +1,31 @@
+{
+  "source_sha": "c0c008684057971e9311a2eb30f675c1f3312aad",
+  "exact_classes": [
+    "step:InvalidInput",
+    "step:IncompatibleVersion",
+    "step:InvalidState",
+    "step:StaleEpoch",
+    "step:Capacity",
+    "step:Timeout",
+    "step:Disconnected",
+    "step:Io",
+    "step:Internal",
+    "pull_typed_frame:InvalidInput",
+    "pull_typed_frame:IncompatibleVersion",
+    "pull_typed_frame:InvalidState",
+    "pull_typed_frame:StaleEpoch",
+    "pull_typed_frame:Capacity",
+    "pull_typed_frame:Timeout",
+    "pull_typed_frame:Disconnected",
+    "pull_typed_frame:Io",
+    "pull_typed_frame:Internal"
+  ],
+  "three_repeated_refusals_each": true,
+  "malformed_envelopes_per_method": 3,
+  "bounded_status": true,
+  "unchanged_trace": true,
+  "prior_frame_and_fanout_preserved": true,
+  "recovery_clears": true,
+  "refused_reset_retains": true,
+  "successful_reset_clears": true
+}

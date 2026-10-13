@@ -1,0 +1,439 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "rows": 67,
+  "families": 10,
+  "actions": 20,
+  "packet_variants": 36,
+  "oracles": 28,
+  "limits": 41,
+  "rust_references": 151,
+  "missing": [],
+  "discovered": {
+    "mornlea_client_core::lifecycle_contract": 10,
+    "mornlea_client_core::prediction_replay": 48,
+    "mornlea_client_core::presentation_contract": 232,
+    "mornlea_client_core::session_replay": 98,
+    "mornlea_godot::rust_producer": 42,
+    "mornlea_godot::rust_server_integration": 40,
+    "mornlea_protocol::runtime_contract": 134
+  },
+  "historical_preserved": [
+    "908a099282a1ad35736d0ce7ba17abcb089299a8",
+    "f58a86d39"
+  ],
+  "sealed_cases": 1434,
+  "changed_source_hash_leaves": [
+    "corpus.families[8].sources[6].sha256",
+    "corpus.families[9].sources[6].sha256",
+    "corpus.families[10].sources[7].sha256",
+    "corpus.families[11].sources[6].sha256",
+    "corpus.families[12].sources[10].sha256",
+    "corpus.families[13].sources[6].sha256",
+    "corpus.families[14].sources[4].sha256",
+    "corpus.families[15].sources[4].sha256",
+    "corpus.families[16].sources[4].sha256",
+    "corpus.families[16].sources[5].sha256",
+    "corpus.families[17].sources[4].sha256",
+    "corpus.families[18].sources[3].sha256"
+  ],
+  "append_only_rows": [
+    {
+      "group": "families",
+      "row": "input@1",
+      "added": [
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "families",
+      "row": "actors@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member",
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+        "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose"
+      ]
+    },
+    {
+      "group": "families",
+      "row": "player-view@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "families",
+      "row": "world-ui@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "PlayerState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "RemotePlayerSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "RemotePlayerDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "RemotePlayerStates",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "ItemDropUpserts",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "CompanionSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "CompanionStates",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "CompanionDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "HostileSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+        "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "HostileState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "HostileDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "PassiveSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "PassiveState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "PassiveDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "ProjectileSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "ProjectileState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
+      ]
+    },
+    {
+      "group": "packet_variants",
+      "row": "ProjectileDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "limits",
+      "row": "hostile_mirror_capacity",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "limits",
+      "row": "passive_mirror_capacity",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "limits",
+      "row": "projectile_mirror_capacity",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "limits",
+      "row": "companion_active_capacity",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "limits",
+      "row": "session_drop_capacity",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "input@1",
+      "added": [
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "actors@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member",
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+        "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "player-view@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "world-ui@1",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.PlayerState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.RemotePlayerSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.RemotePlayerDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.RemotePlayerStates",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.ItemDropUpserts",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.CompanionSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.CompanionStates",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.CompanionDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.HostileSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps",
+        "mornlea_client_core::session_replay::mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.HostileState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark",
+        "mornlea_client_core::session_replay::live::freshness_live_stale_actor_state_cannot_publish_old_pose",
+        "mornlea_client_core::session_replay::mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.HostileDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.PassiveSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.PassiveState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.PassiveDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.ProjectileSpawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed",
+        "mornlea_client_core::session_replay::mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.ProjectileState",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity",
+        "mornlea_client_core::session_replay::mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals",
+        "mornlea_client_core::session_replay::mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark"
+      ]
+    },
+    {
+      "group": "rows",
+      "row": "packet.play.ProjectileDespawn",
+      "added": [
+        "mornlea_client_core::session_replay::mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity"
+      ]
+    }
+  ]
+}

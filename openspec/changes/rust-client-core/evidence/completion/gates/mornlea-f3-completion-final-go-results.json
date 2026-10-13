@@ -1,0 +1,30 @@
+{
+  "source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268",
+  "cwd": "/Users/chen/work/mornlea/.worktrees/rust-client-core",
+  "group": "go",
+  "started_at": 1791861467.701952,
+  "tests": [
+    {
+      "command": [
+        "make",
+        "test-race"
+      ],
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f3-completion-final-test-race.log",
+      "elapsed_seconds": 1573.12
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./packages/audit",
+        "-count=1"
+      ],
+      "exit_code": 0,
+      "log": "/private/tmp/mornlea-f3-completion-final-audit.log",
+      "elapsed_seconds": 153.054
+    }
+  ],
+  "finished_at": 1791863193.9073331,
+  "final_source_sha": "2cea2020091168ea5a6845517bc49ccbdbae0268"
+}

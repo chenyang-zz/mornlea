@@ -1,0 +1,31 @@
+import hashlib, importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile
+root=pathlib.Path('/Users/chen/work/mornlea/.worktrees/rust-client-core')
+source='2cea2020091168ea5a6845517bc49ccbdbae0268'
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()==source
+spec=importlib.util.spec_from_file_location('owned_native_runner',root/'scripts/godot/rust-session-smoke.py')
+runner=importlib.util.module_from_spec(spec);spec.loader.exec_module(runner)
+owned=pathlib.Path(tempfile.mkdtemp(prefix='mornlea-f3-completion-native-bridge.',dir='/private/tmp'))
+project=owned/'project'
+shutil.copytree(root/'apps/mornlea-godot',project,symlinks=True,ignore=shutil.ignore_patterns('.venv','.godot','__pycache__'))
+library='addons/mornlea_bridge/bin/macos-universal/debug/libmornlea_godot.dylib'
+assert runner.sha256(root/'apps/mornlea-godot'/library)==runner.sha256(project/library)
+for name in ('home','empty-bin','poison'):(owned/name).mkdir()
+(owned/'poison/sitecustomize.py').write_text('raise RuntimeError("ambient Python reached isolated native bridge probe")\n')
+env=dict(os.environ,HOME=str(owned/'home'),PATH=str(owned/'empty-bin'),PYTHONPATH=str(owned/'poison'),PYTHONHOME=str(owned/'poison'),PYTHONSTARTUP=str(owned/'poison/sitecustomize.py'),PYTHONUSERBASE=str(owned/'poison'))
+godot=pathlib.Path(subprocess.check_output([str(root/'scripts/godot/godot.sh'),'--print-path'],text=True).strip())
+prefix=['/usr/bin/sandbox-exec','-p','(version 1)(allow default)(deny network*)',str(godot)]
+report={'source_sha':source,'contract_sha':runner.contract_sha(root),'native_sha256':runner.sha256(project/library),'godot_sha256':runner.sha256(godot),'python':runner.python_identity(root,project),'project':str(project),'ok':False}
+try:
+ runner.run_child(prefix+['--headless','--path',str(project),'--editor','--quit-after','120'],owned/'import.log',45,env)
+ runner.run_child(prefix+['--headless','--path',str(project),'--quit-after','120','res://tests/scenes/rust_bridge_lifecycle_check.tscn'],owned/'boundary.log',45,env)
+ text=(owned/'boundary.log').read_text()
+ assert text.count('Rust native lifecycle check passed.')==1,text
+ assert 'SCRIPT ERROR:' not in text and 'ERROR:' not in text,text
+ assert text.count('[mornlea-rust-session] native-release=core')==1,text
+ report['python_final']=runner.python_identity(root,project)
+ assert report['python']['static_sha256']==report['python_final']['static_sha256']
+ assert report['native_sha256']==runner.sha256(project/library)
+ report['ok']=True
+finally:
+ (owned/'report.json').write_text(json.dumps(report,indent=2)+'\n')
+ print(json.dumps({'owned':str(owned),'ok':report['ok']}),flush=True)

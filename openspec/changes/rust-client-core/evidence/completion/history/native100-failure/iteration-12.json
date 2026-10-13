@@ -1,0 +1,1 @@
+{"ok": false, "error": "AssertionError({'header': {'epoch': '2', 'operation': 'Upsert', 'revision': '0', 'source_tick': None}, 'phase': 'Closing', 'player_id': None, 'terminal': {'tag': 'LoginRejected', 'value': '\u73a9\u5bb6\u5df2\u5728\u7ebf'}})"}

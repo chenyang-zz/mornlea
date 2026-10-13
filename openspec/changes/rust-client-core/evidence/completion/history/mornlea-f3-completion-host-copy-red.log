@@ -1,0 +1,16 @@
+F
+======================================================================
+FAIL: test_native_frame_copy_refusal_reports_status_without_partial_fanout (__main__.RustFeatureHostTest.test_native_frame_copy_refusal_reports_status_without_partial_fanout)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/chen/work/mornlea/.worktrees/rust-client-core/apps/mornlea-godot/tests/unit/test_rust_feature_host.py", line 993, in test_native_frame_copy_refusal_reports_status_without_partial_fanout
+    self.assertEqual(self.host.last_rust_failure(), "frame:InvalidInput")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '' != 'frame:InvalidInput'
++ frame:InvalidInput
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)

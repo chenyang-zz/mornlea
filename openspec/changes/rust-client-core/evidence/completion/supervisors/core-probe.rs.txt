@@ -1,0 +1,219 @@
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use mornlea_client_core::{ClientConfig, ClientCore, ClientEndpoint, ClientIdentity, ClientLimits, ClientWorkBudget, ConnectorRegistry, Endpoint, SessionEpoch, StdMonotonicClock, FamilyRecords};
+use mornlea_client_core::session::io::{MemoryConnector, MemoryPeer};
+use mornlea_domain::{Dimension, Identities, PlayerId, HostileId};
+use mornlea_protocol::{LoginStart, LoginSuccess, ServerHello, ServerPacket, HostileSpawn, HostileSpawnRecord, HostileState, HostileStateRecord, HOSTILE_KIND_NIGHTWALKER};
+
+struct Connection { core: ClientCore, peer: MemoryPeer, epoch: SessionEpoch }
+impl Connection {
+    fn new() -> Self {
+        let limits = ClientLimits::try_new().unwrap();
+        let id = NonZeroU64::new(1).unwrap();
+        let (connector, peer) = MemoryConnector::pair(limits, id);
+        let mut connectors = ConnectorRegistry::new();
+        connectors.register(id, connector).unwrap();
+        let config = ClientConfig::try_new(limits, Duration::from_secs(5), Duration::from_secs(10), Arc::new(StdMonotonicClock), Arc::new(connectors)).unwrap();
+        let mut core = ClientCore::new(config).unwrap();
+        let player = PlayerId::try_from_bytes([0,0,0,0,0,0,0x40,0,0x80,0,0,0,0,0,0,1]).unwrap();
+        let identity = ClientIdentity::try_new(LoginStart::new(player, "review", 2).unwrap()).unwrap();
+        let epoch = core.connect(Endpoint::Memory { connector_id:id }, identity).unwrap();
+        let mut connection = Self { core, peer, epoch };
+        connection.peer.drain_sent();
+        connection.feed(ServerPacket::ServerHello(ServerHello::new(Identities::current().protocol).unwrap()));
+        connection.step();
+        connection.peer.drain_sent();
+        connection.feed(ServerPacket::LoginSuccess(LoginSuccess::new(player,42)));
+        connection.step();
+        connection
+    }
+    fn feed(&self, packet:ServerPacket) {
+        let mut codec = mornlea_protocol::ProtocolCodec::new().unwrap();
+        let mut bytes = vec![0;2<<20];
+        let len = codec.encode_server_into(&packet,&mut bytes).unwrap();
+        self.peer.feed(&mornlea_protocol::write_frame(packet.key().id,&bytes[..len]).unwrap()).unwrap();
+    }
+    fn step(&mut self) { self.core.step(self.epoch,ClientWorkBudget::try_new(8,0).unwrap()).unwrap(); }
+}
+fn spawn(tick:u64,id:u64) -> ServerPacket {
+    ServerPacket::HostileSpawn(HostileSpawn::new(tick,vec![HostileSpawnRecord { id:HostileId::try_new(id).unwrap(), dimension:Dimension::OVERWORLD, position:[2.0,64.0,2.0], yaw:0.0, health:20, kind:HOSTILE_KIND_NIGHTWALKER }]).unwrap())
+}
+fn state(tick:u64,x:f32) -> ServerPacket {
+    ServerPacket::HostileState(HostileState::new(tick,vec![HostileStateRecord { id:HostileId::try_new(1).unwrap(), position:[x,64.0,2.0], velocity:[0.0;3], yaw:0.0, health:19, kind:HOSTILE_KIND_NIGHTWALKER }]).unwrap())
+}
+#[test]
+fn backward_actor_tick_does_not_publish_an_older_pose() {
+    let mut c = Connection::new();
+    c.feed(spawn(10,1)); c.step();
+    c.feed(state(12,12.0)); c.step();
+    c.feed(state(11,11.0)); c.step();
+    let frame = c.core.snapshot(c.epoch).unwrap();
+    let actors = frame.families().iter().find_map(|family| match family.records() { FamilyRecords::Actors(records) => Some(records), _=>None }).unwrap();
+    eprintln!("latest revision={} actors={actors:?}",frame.confirmed_revision().get());
+    assert!(actors.iter().all(|record|record.header().source_tick()!=Some(11)),"stale actor state must not become a fresh upsert");
+}
+#[test]
+fn fixed_hostile_mirror_ceiling_does_not_grow_after_consumption() {
+    use mornlea_client_core::{ConfirmedRevision, ObservationKey, AcceptedObservation, PublicationConsumption};
+    use mornlea_client_core::session::mirror::MirrorProvider;
+    let epoch = SessionEpoch::try_new(1).unwrap();
+    let limits = ClientLimits::try_new().unwrap();
+    let mut provider = MirrorProvider::new(epoch,limits).unwrap();
+    provider.admit().unwrap();
+    for n in 1..=65 {
+        let key = ObservationKey::try_new(epoch,ConfirmedRevision::new(n),0).unwrap();
+        let before = provider.mirror().clone();
+        let result = provider.commit(&AcceptedObservation::try_new(key,None,spawn(n,n),vec![]).unwrap());
+        if n == 65 {
+            assert_eq!(result, Err(mornlea_client_core::ClientError::Capacity));
+            assert_eq!(provider.mirror(), &before);
+            assert!(provider.observations().is_empty());
+        } else {
+            result.unwrap();
+            provider.consume(&PublicationConsumption::try_new(1,0,0,0).unwrap()).unwrap();
+        }
+    }
+    eprintln!("live_hostiles={} pending_observations={}",provider.mirror().actors().hostiles().len(),provider.observations().len());
+    assert!(provider.mirror().actors().hostiles().len()<=64,"frozen inventory hostile_mirror_capacity is 64");
+}
+
+fn authority(tick: u64, health: u8, dimension: Dimension) -> ServerPacket {
+    ServerPacket::PlayerState(
+        mornlea_protocol::PlayerState::new(
+            tick,
+            0,
+            dimension,
+            [3.5, 2.0, 5.5],
+            [0.0; 3],
+            0.0,
+            0.0,
+            true,
+            true,
+            false,
+            false,
+            mornlea_protocol::BlockPos::ZERO,
+            0,
+            0,
+            false,
+            health,
+            300,
+            20,
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap(),
+    )
+}
+
+
+#[test]
+fn backward_player_tick_does_not_replace_survival() {
+    let mut c = Connection::new();
+    c.feed(authority(12,20,Dimension::OVERWORLD)); c.step();
+    c.feed(authority(11,1,Dimension::OVERWORLD)); c.step();
+    let frame = c.core.snapshot(c.epoch).unwrap();
+    let world = frame.families().iter().find_map(|family| match family.records() { FamilyRecords::WorldUi(records) => Some(records), _=>None }).unwrap();
+    eprintln!("world-ui={world:?}");
+    assert!(world.iter().all(|record|record.header().source_tick()!=Some(11)),"stale PlayerState must not replace survival/environment");
+}
+
+use mornlea_domain::{CompanionId, PassiveId, ProjectileId, DropId, ChunkPos};
+use mornlea_protocol::{CompanionSpawn, PassiveSpawn, PassiveSpawnRecord, ProjectileSpawn, ProjectileSpawnRecord, PROJECTILE_KIND_SHARD, ItemDropUpserts, ItemDrop};
+fn companion_spawn(buddy: CompanionId, tick: u64) -> ServerPacket {
+    ServerPacket::CompanionSpawn(
+        CompanionSpawn::new(
+            buddy,
+            "buddy".to_string(),
+            tick,
+            Dimension::OVERWORLD,
+            [1.0, 64.0, 1.0],
+            0.0,
+            0.0,
+        )
+        .expect("companion spawn"),
+    )
+}
+fn passive_spawn(tick: u64, id: PassiveId) -> ServerPacket {
+    ServerPacket::PassiveSpawn(
+        PassiveSpawn::new(
+            tick,
+            vec![PassiveSpawnRecord {
+                id,
+                dimension: Dimension::OVERWORLD,
+                position: [3.0, 64.0, 3.0],
+                yaw: 0.0,
+                health: 10,
+            }],
+        )
+        .expect("passive spawn"),
+    )
+}
+fn projectile_spawn(tick: u64, id: ProjectileId) -> ServerPacket {
+    ServerPacket::ProjectileSpawn(
+        ProjectileSpawn::new(
+            tick,
+            vec![ProjectileSpawnRecord {
+                id,
+                kind: PROJECTILE_KIND_SHARD,
+                dimension: Dimension::OVERWORLD,
+                position: [4.0, 64.0, 4.0],
+                velocity: [0.0, 0.0, 0.0],
+            }],
+        )
+        .expect("projectile spawn"),
+    )
+}
+fn drop_upserts(tick: u64, id: DropId) -> ServerPacket {
+    ServerPacket::ItemDropUpserts(
+        ItemDropUpserts::new(
+            tick,
+            vec![ItemDrop {
+                id,
+                block_index: 0,
+                item: 1,
+                count: 1,
+                durability: 0,
+            }],
+        )
+        .expect("drop upserts"),
+    )
+}
+
+#[test]
+fn other_fixed_actor_ceiling_plus_one_preserves_the_mirror() {
+    use mornlea_client_core::{ConfirmedRevision, ObservationKey, AcceptedObservation, PublicationConsumption};
+    use mornlea_client_core::session::mirror::MirrorProvider;
+    let mut failures = Vec::new();
+    for (kind,cap) in [("companion",4u64),("passive",32),("projectile",128),("drop",800)] {
+        let epoch = SessionEpoch::try_new(1).unwrap();
+        let mut provider = MirrorProvider::new(epoch,ClientLimits::try_new().unwrap()).unwrap();
+        provider.admit().unwrap();
+        for n in 1..=cap+1 {
+            let packet = match kind {
+                "companion" => companion_spawn(CompanionId::try_from_bytes([0,0,0,0,0,0,0x40,0,0x80,0,0,0,0,0,0,n as u8]).unwrap(),n),
+                "passive" => passive_spawn(n,PassiveId::try_new(n).unwrap()),
+                "projectile" => projectile_spawn(n,ProjectileId::try_new(n).unwrap()),
+                "drop" => drop_upserts(n,DropId::try_new(0,ChunkPos::new(n as i32,0),0,1).unwrap()),
+                _=>unreachable!()
+            };
+            let key = ObservationKey::try_new(epoch,ConfirmedRevision::new(n),0).unwrap();
+            let before = provider.mirror().clone();
+            let result = provider.commit(&AcceptedObservation::try_new(key,None,packet,vec![]).unwrap());
+            if n==cap+1 {
+                if result!=Err(mornlea_client_core::ClientError::Capacity) || provider.mirror()!=&before || !provider.observations().is_empty() {
+                    failures.push(kind);
+                }
+            } else { result.unwrap(); }
+            if result.is_ok() { provider.consume(&PublicationConsumption::try_new(1,0,0,0).unwrap()).unwrap(); }
+        }
+        let actors = provider.mirror().actors();
+        let count = match kind { "companion"=>actors.companions().len(), "passive"=>actors.passives().len(), "projectile"=>actors.projectiles().len(), "drop"=>actors.drops().len(), _=>0 };
+        eprintln!("kind={kind} fixed_cap={cap} retained={count}");
+    }
+    assert!(failures.is_empty(),"fixed actor cap+1 mutated instead of whole Capacity: {failures:?}");
+}

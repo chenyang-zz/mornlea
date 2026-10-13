@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/server_contract.rs (/private/tmp/mornlea-f3-completion-provider-cargo/debug/deps/server_contract-8fbdf2fb3a27771e)
+
+running 1 test
+test runtime_companion::bootstrap_save_failure_stops_startup_before_agent_and_authority ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 312 filtered out; finished in 0.07s
+

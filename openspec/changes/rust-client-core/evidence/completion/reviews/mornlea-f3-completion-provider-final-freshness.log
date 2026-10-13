@@ -1,0 +1,21 @@
+   Compiling mornlea_protocol v0.1.0 (/private/tmp/mornlea-f3-completion-provider-final-review/packages/engine/crates/mornlea_protocol)
+   Compiling mornlea_client_core v0.1.0 (/private/tmp/mornlea-f3-completion-provider-final-review/packages/engine/crates/mornlea_client_core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.71s
+     Running tests/session_replay.rs (/private/tmp/mornlea-f3-completion-provider-cargo/debug/deps/session_replay-d23fc588efb00fd2)
+
+running 12 tests
+test mirror::freshness_seeded_mirrors_obey_fixed_and_selected_live_caps ... ok
+test mirror::freshness_refused_future_state_does_not_poison_actor_or_player_ticks ... ok
+test mirror::freshness_multi_spawn_capacity_rejects_every_member_atomically ... ok
+test mirror::freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals ... ok
+test mirror::freshness_selected_family_bound_limits_all_live_kinds_in_aggregate ... ok
+test mirror::freshness_actor_watermarks_survive_consumption_and_retire_with_identity ... ok
+test live::freshness_live_stale_actor_state_cannot_publish_old_pose ... ok
+test mirror::freshness_stale_and_equal_player_observations_are_noops_after_consumption ... ok
+test mirror::freshness_suppression_byte_refusal_preserves_the_unpublished_watermark ... ok
+test mirror::freshness_strict_batches_reject_the_fresh_member_with_the_stale_member ... ok
+test live::freshness_live_stale_player_state_cannot_publish_survival_environment_or_acknowledgment ... ok
+test mirror::freshness_fixed_live_caps_hold_after_every_observation_is_consumed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.01s
+

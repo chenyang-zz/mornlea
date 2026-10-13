@@ -1,0 +1,22 @@
+commit b7caaf3feaf0b1e7b76d2c41859d07bd924d742f
+Author:     chen <chenyangzhao542@gmail.com>
+AuthorDate: Tue Oct 13 11:08:57 2026 +0800
+Commit:     chen <chenyangzhao542@gmail.com>
+CommitDate: Tue Oct 13 11:08:57 2026 +0800
+
+    fix(client-core): bound live mirrors and reject stale source facts
+
+ .../src/presentation/actors/hostile.rs             |   3 +
+ .../src/presentation/actors/passive.rs             |   3 +
+ .../src/presentation/actors/projectile.rs          |   3 +
+ .../mornlea_client_core/src/presentation/mod.rs    |  19 +
+ .../mornlea_client_core/src/session/mirror.rs      | 233 +++++++++-
+ .../tests/presentation_contract/actors.rs          |  55 ++-
+ .../presentation_contract/actors_companion.rs      |  25 +-
+ .../tests/presentation_contract/actors_passive.rs  |  49 +-
+ .../presentation_contract/world_environment.rs     |  21 +-
+ .../tests/presentation_contract/world_survival.rs  |  21 +-
+ .../tests/presentation_contract/world_ui.rs        |  33 +-
+ .../tests/session_replay/live.rs                   |  81 ++++
+ .../tests/session_replay/mirror.rs                 | 509 +++++++++++++++++++++
+ 13 files changed, 1016 insertions(+), 39 deletions(-)

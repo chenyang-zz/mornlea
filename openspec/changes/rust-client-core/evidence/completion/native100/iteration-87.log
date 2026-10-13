@@ -1,0 +1,37 @@
+Initialize godot-rust (API v4.7.stable.official, runtime v4.7.2.stable.official, safeguards strict)
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[mornlea-lifecycle] rust-init=scene
+#################################################
+              _  _                  _       _
+             | || |                | |     | |
+  _ __  _   _| || |_ __ _  ___   __| | ___ | |_
+ | '_ \| | | |__   _/ _` |/ _ \ / _` |/ _ \| __|
+ | |_) | |_| |  | || (_| | (_) | (_| | (_) | |_
+ | .__/ \__, |  |_| \__, |\___/ \__,_|\___/ \__|
+ | |     __/ |       __/ |
+ |_|    |___/       |___/
+ ################################################
+
+[mornlea-lifecycle] rust-init=editor
+[mornlea-lifecycle] rust-init=main-loop
+WARNING: Method `MornleaClientBridge::connect` shadows a method of a base class.
+Both stay registered -- either your method or the base one is called, depending on the static type at the call site.
+Rename the Rust fn or use #[func(rename = ...)]. This will become a hard error in godot-rust v0.6.
+(Suppress this warning with env-var `GDRUST_SUPPRESSED_WARNINGS=shadowed_method,...`)
+     at: godot_core::registry::reg_validation::strict (/Users/chen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/godot-core-0.5.5/src/registry/reg_validation.rs:119)
+[mornlea-lifecycle] python-init=host
+
+[mornlea-rust-session] python-release=consumer
+
+[mornlea-rust-session] native-release=core
+
+[mornlea-rust-session] session=complete
+
+[mornlea-lifecycle] python-deinit=features
+
+[mornlea-lifecycle] python-deinit=bridge
+
+[mornlea-lifecycle] rust-deinit=main-loop
+[mornlea-lifecycle] rust-deinit=editor
+[mornlea-lifecycle] rust-deinit=scene

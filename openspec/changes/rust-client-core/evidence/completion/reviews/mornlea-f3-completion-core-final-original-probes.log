@@ -1,0 +1,32 @@
+   Compiling mornlea_engine v0.1.0 (/private/tmp/mornlea-f3-completion-core-final-review/packages/engine/crates/mornlea_engine)
+   Compiling mornlea_domain v0.1.0 (/private/tmp/mornlea-f3-completion-core-final-review/packages/engine/crates/mornlea_domain)
+   Compiling mornlea_client_core v0.1.0 (/private/tmp/mornlea-f3-completion-core-final-review/packages/engine/crates/mornlea_client_core)
+   Compiling mornlea_protocol v0.1.0 (/private/tmp/mornlea-f3-completion-core-final-review/packages/engine/crates/mornlea_protocol)
+   Compiling f3-core-review-probe v0.0.0 (/private/tmp/mornlea-f3-completion-core-final-probe)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.19s
+     Running tests/probe.rs (/private/tmp/mornlea-f3-completion-core-cargo/debug/deps/probe-ddbc5c8a896bf2ba)
+
+running 4 tests
+kind=companion fixed_cap=4 retained=4
+kind=passive fixed_cap=32 retained=32
+
+thread 'fixed_hostile_mirror_ceiling_does_not_grow_after_consumption' (51907797) panicked at tests/probe.rs:64:93:
+called `Result::unwrap()` on an `Err` value: Capacity
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test fixed_hostile_mirror_ceiling_does_not_grow_after_consumption ... FAILED
+latest revision=2 actors=[]
+test backward_actor_tick_does_not_publish_an_older_pose ... okkind=projectile fixed_cap=128 retained=128
+
+world-ui=[WorldUiRecord { header: RecordHeader { epoch: SessionEpoch(1), revision: ConfirmedRevision(1), source_tick: None, operation: Upsert }, view: Prompt(None) }]
+test backward_player_tick_does_not_replace_survival ... ok
+kind=drop fixed_cap=800 retained=800
+test other_fixed_actor_ceiling_plus_one_preserves_the_mirror ... ok
+
+failures:
+
+failures:
+    fixed_hostile_mirror_ceiling_does_not_grow_after_consumption
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--test probe`
