@@ -56,7 +56,7 @@
     },
     {
       "path": "openspec/changes/rust-client-core/ledger.md",
-      "sha256": "866db3838abf2dbd4fe5d00671ac535a1c0fd9f7a0bbd6e100adb1c3ce7c86a3"
+      "sha256": "3f68c72dbd632cad85f3e4c224614d50c2b1111676f6722d828dc3621c6d6abd"
     },
     {
       "path": "openspec/changes/rust-client-core/proposal.md",
@@ -67,5 +67,13 @@
       "sha256": "9058fb302fd1dacf71f63c055efda389702fe284bed29e5b558d2205f548cd15"
     }
   ],
-  "post_validation_typographical_correction": "Closed the source-SHA code span in design.md; no link, command, behavior or criterion change."
+  "post_validation_typographical_correction": "Closed the source-SHA code span in design.md; no link, command, behavior or criterion change.",
+  "scope": "The earlier git diff check covered tracked document edits before raw evidence was staged; its pass did not check then-untracked logs.",
+  "raw_evidence_staging_failure": {
+    "command": "git diff --cached --check",
+    "exit_code": 2,
+    "result": "fail",
+    "created_commit": "773d35121ced12246b965298ee47775b82af7324",
+    "reason": "15 original raw logs contain trailing blank lines; controller shell failed to stop before commit."
+  }
 }

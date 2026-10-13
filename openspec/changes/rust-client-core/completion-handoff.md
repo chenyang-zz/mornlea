@@ -1,6 +1,6 @@
 # F3 completion handoff
 
-All 52 implementation and qualification nodes are complete at runtime source `2cea2020091168ea5a6845517bc49ccbdbae0268`. Three independent scoped reviewers verified the same immutable candidate; the coordinator combines their original-criterion coverage with complete stage gates. The [manifest](evidence/completion/MANIFEST.json) retains checksummed original reports, commands, logs and all 100 native process results. Product source and evidence commits remain separate identities.
+All 52 implementation and qualification nodes are complete at runtime source `2cea2020091168ea5a6845517bc49ccbdbae0268`. Three independent scoped reviewers verified the same immutable candidate; the coordinator combines their original-criterion coverage with complete stage gates. The [manifest](evidence/completion/MANIFEST.json) retains checksummed original reports, commands, losslessly compressed logs and all 100 native process results. Gzip entries record both stored and decoded SHA256/size; decoded logs match the originals byte for byte. Product source and evidence commits remain separate identities.
 
 The final global review found and repaired stale authoritative state publication, retained live-mirror cap overruns and absent host publication-failure status. The [repair packet](plans/18-completion-review-repairs.md) records the exact compatibility policy. Source-specific strict/lenient admission, whole-capacity refusal, original record provenance and one bounded stable host status now pass fresh regressions and independent probes. No protocol, save, ABI, dependency, production default or server gameplay change is included.
 
@@ -68,7 +68,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "evidence": [
         "evidence/completion/reviews/mornlea-f3-completion-core-final-review.md",
         "evidence/completion/reviews/mornlea-f3-completion-provider-final-review.md",
-        "evidence/completion/gates/mornlea-f3-completion-final-test-race.log"
+        "evidence/completion/gates/mornlea-f3-completion-final-test-race.log.gz"
       ]
     },
     {
@@ -76,7 +76,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "result": "pass",
       "evidence": [
         "evidence/completion/reviews/mornlea-f3-completion-native-final-review.md",
-        "evidence/completion/gates/mornlea-f3-completion-final-godot-static.log"
+        "evidence/completion/gates/mornlea-f3-completion-final-godot-static.log.gz"
       ]
     },
     {
@@ -104,7 +104,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "make rust",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-build.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-build.log.gz",
       "elapsed_seconds": 57.002
     },
     {
@@ -112,7 +112,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "make rust-check",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-check.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-rust-check.log.gz",
       "elapsed_seconds": 879.933
     },
     {
@@ -120,7 +120,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "make dev-check",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-dev-check.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-dev-check.log.gz",
       "elapsed_seconds": 1088.902
     },
     {
@@ -128,7 +128,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "make test-race",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-test-race.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-test-race.log.gz",
       "elapsed_seconds": 1573.12
     },
     {
@@ -136,7 +136,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "go test ./packages/audit -count=1",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-audit.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-audit.log.gz",
       "elapsed_seconds": 153.054
     },
     {
@@ -144,7 +144,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "scripts/godot/smoke.sh --iterations 100 --isolated-python --core rust --exercise-session",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-session100.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-session100.log.gz",
       "elapsed_seconds": 753.6
     },
     {
@@ -152,7 +152,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "scripts/godot/python-runtime-check.sh --qualify --offline",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-python-matrix.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-python-matrix.log.gz",
       "elapsed_seconds": 337.347
     },
     {
@@ -160,7 +160,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "make godot-python-check godot-project-check godot-capability-check",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-godot-static.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-godot-static.log.gz",
       "elapsed_seconds": 11.255
     },
     {
@@ -168,7 +168,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "openspec validate --all --strict --no-interactive",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-openspec.log",
+      "evidence": "evidence/completion/gates/mornlea-f3-completion-final-openspec.log.gz",
       "elapsed_seconds": 2.007
     },
     {
@@ -176,7 +176,7 @@ This round is locally complete and ready for the user-authorized local `dev` mer
       "command": "python3 /private/tmp/mornlea-f3-completion-native-bridge.py",
       "exit_code": 0,
       "result": "pass",
-      "evidence": "evidence/completion/native-boundary/supervisor.log"
+      "evidence": "evidence/completion/native-boundary/supervisor.log.gz"
     }
   ],
   "evidence": [

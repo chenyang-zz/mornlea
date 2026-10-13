@@ -1,8 +1,0 @@
-   Compiling mornlea_engine v0.1.0 (/private/tmp/mornlea-f3-core-repair/packages/engine/crates/mornlea_engine)
-    Checking zstd-sys v2.0.16+zstd.1.5.7
-    Checking zstd-safe v7.2.4
-    Checking zstd v0.13.3
-   Compiling mornlea_client_core v0.1.0 (/private/tmp/mornlea-f3-core-repair/packages/engine/crates/mornlea_client_core)
-    Checking mornlea_domain v0.1.0 (/private/tmp/mornlea-f3-core-repair/packages/engine/crates/mornlea_domain)
-    Checking mornlea_protocol v0.1.0 (/private/tmp/mornlea-f3-core-repair/packages/engine/crates/mornlea_protocol)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.16s

@@ -1,3 +1,0 @@
-go run scripts/client-native-data.go -check
-signal: killed
-make: *** [dev-check] Error 1
