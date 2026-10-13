@@ -10,7 +10,9 @@ from audit.boundaries import (
     verify_module_require_boundaries,
     verify_module_require_violations,
     verify_server_client_separation,
+    verify_workspace_modules_match_units,
 )
+from audit.workspace import get_workspace_modules
 
 
 def test_package_unit_require_boundaries(repo_root: Path) -> None:
@@ -40,6 +42,21 @@ def test_package_unit_require_boundaries(repo_root: Path) -> None:
         if mod_file.is_file():
             leaf_requires = parse_go_mod_requires(mod_file)
             assert leaf_requires == set(), f"Leaf unit packages/{leaf} must have no sibling requires, got {leaf_requires}"
+
+
+def test_workspace_use_set_matches_unit_modules(repo_root: Path) -> None:
+    """Verify go.work use entries exactly match the directories under packages/ containing go.mod."""
+    violations = verify_workspace_modules_match_units(repo_root)
+    assert not violations, "\n".join(violations)
+
+    # Direct parity check
+    packages_dir = repo_root / "packages"
+    unit_modules = sorted([
+        f"packages/{entry.name}"
+        for entry in packages_dir.iterdir()
+        if entry.is_dir() and (entry / "go.mod").is_file()
+    ])
+    assert get_workspace_modules(repo_root) == unit_modules
 
 
 def test_unit_require_violations_detect_drift() -> None:
@@ -190,15 +207,49 @@ def test_server_client_boundary_guard_detects_drift() -> None:
     )
     violations = server_client_import_violations(sources)
     assert len(violations) == 1
-    assert "shared production file packages/shared/core/world.go" in violations[0]
+    assert "shared file packages/shared/core/world.go" in violations[0]
     assert "packages/server" in violations[0]
 
-    # Case 7: Shared production file importing client is rejected
+    # Case 7: Shared test file importing server is also rejected (shared has no test exemption)
+    sources = contract_sources()
+    sources["packages/shared/core/world_test.go"] = (
+        'package core_test\nimport _ "github.com/channing771/mornlea/packages/server/server"\n'
+    )
+    violations = server_client_import_violations(sources)
+    assert len(violations) == 1
+    assert "shared file packages/shared/core/world_test.go" in violations[0]
+    assert "packages/server" in violations[0]
+
+    # Case 8: Shared production file importing client is rejected
     sources = contract_sources()
     sources["packages/shared/physics/movement.go"] = (
         'package physics\nimport _ "github.com/channing771/mornlea/packages/client/client"\n'
     )
     violations = server_client_import_violations(sources)
     assert len(violations) == 1
-    assert "shared production file packages/shared/physics/movement.go" in violations[0]
+    assert "shared file packages/shared/physics/movement.go" in violations[0]
+    assert "packages/client" in violations[0]
+
+    # Case 9: Shared test file importing client is also rejected
+    sources = contract_sources()
+    sources["packages/shared/physics/movement_test.go"] = (
+        'package physics_test\nimport _ "github.com/channing771/mornlea/packages/client/client"\n'
+    )
+    violations = server_client_import_violations(sources)
+    assert len(violations) == 1
+    assert "shared file packages/shared/physics/movement_test.go" in violations[0]
+    assert "packages/client" in violations[0]
+
+    # Case 10: Import block with inline comment containing closing parenthesis is not truncated
+    sources = contract_sources()
+    sources["packages/server/sim/runtime/comment_parens.go"] = (
+        'package runtime\n'
+        'import (\n'
+        '\t"math" // inline note (with parens)\n'
+        '\t_ "github.com/channing771/mornlea/packages/client/client"\n'
+        ')\n'
+    )
+    violations = server_client_import_violations(sources)
+    assert len(violations) == 1
+    assert "server production file packages/server/sim/runtime/comment_parens.go" in violations[0]
     assert "packages/client" in violations[0]

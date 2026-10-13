@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from audit.common import get_repo_root
+from audit.workspace import get_workspace_modules
 
 # Allowed direct sibling require edges for each package unit's go.mod.
 # Keys and values represent directory names under packages/.
@@ -131,26 +132,67 @@ def verify_module_require_boundaries(repo_root: Path | None = None) -> list[str]
     return verify_module_require_violations(requires)
 
 
+def verify_workspace_modules_match_units(repo_root: Path | None = None) -> list[str]:
+    """Verify that go.work use list exactly matches directories in packages/ with go.mod."""
+    if repo_root is None:
+        repo_root = get_repo_root()
+
+    packages_dir = repo_root / "packages"
+    if not packages_dir.is_dir():
+        return []
+
+    unit_modules = sorted([
+        f"packages/{entry.name}"
+        for entry in packages_dir.iterdir()
+        if entry.is_dir() and (entry / "go.mod").is_file()
+    ])
+    workspace_modules = get_workspace_modules(repo_root)
+
+    if workspace_modules != unit_modules:
+        return [
+            f"go.work use set does not match packages/ go.mod units: "
+            f"use={workspace_modules}, unit_modules={unit_modules}"
+        ]
+
+    return []
+
+
 def _extract_go_imports(content: str) -> list[str]:
-    """Extract raw import paths from Go source code."""
+    """Extract raw import paths from Go source code.
+
+    Parses imports line by line after stripping block comments. Inline comments are
+    removed before checking block closure or searching for string literals, preventing
+    parentheses in comments from prematurely closing import blocks.
+    """
     # Strip block comments
     text = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
     imports: list[str] = []
+    in_import_block = False
 
-    # Match single-line import statements
-    for m in re.finditer(r'^\s*import\s+(?:[A-Za-z0-9_.]+\s+)?\"([^\"]+)\"', text, flags=re.MULTILINE):
-        imports.append(m.group(1).strip())
+    for raw in text.splitlines():
+        line = raw.split("//")[0].strip()
+        if not line:
+            continue
 
-    # Match grouped import blocks
-    for m in re.finditer(r"^\s*import\s*\((.*?)\)", text, flags=re.MULTILINE | re.DOTALL):
-        block = m.group(1)
-        for line in block.splitlines():
-            line = line.split("//")[0].strip()
-            if not line:
+        if in_import_block:
+            if line == ")" or line.startswith(")"):
+                in_import_block = False
                 continue
             match = re.search(r'\"([^\"]+)\"', line)
             if match:
                 imports.append(match.group(1).strip())
+        else:
+            if line.startswith("import (") or line == "import(":
+                in_import_block = True
+                continue
+            if line.startswith("import ") or line.startswith("import\t"):
+                rest = line[len("import") :].strip()
+                if rest == "(":
+                    in_import_block = True
+                    continue
+                match = re.search(r'\"([^\"]+)\"', rest)
+                if match:
+                    imports.append(match.group(1).strip())
 
     return imports
 
@@ -163,8 +205,8 @@ def server_client_import_violations(sources: dict[str, str]) -> list[str]:
        Test files are exempted for mirror-driven integration tests.
     2. Client domain library files (packages/client/* outside cmd/mornlea) MUST NOT import
        packages/server in either production or test code. The only exception is cmd/mornlea.
-    3. Shared production files (*.go, excluding *_test.go) MUST NOT import packages/server
-       or packages/client.
+    3. Shared files (*.go, including *_test.go) MUST NOT import packages/server
+       or packages/client unconditionally.
     """
     violations: list[str] = []
 
@@ -205,19 +247,18 @@ def server_client_import_violations(sources: dict[str, str]) -> list[str]:
                         f"server assembly is only allowed in {CLIENT_CMD_SUBTREE_PREFIX}"
                     )
 
-            # Rule 3: Shared production code cannot import server or client
+            # Rule 3: Shared code cannot import server or client in either production or test files
             elif path.startswith("packages/shared/"):
-                if not is_test_file:
-                    if is_server_import:
-                        violations.append(
-                            f"shared production file {path} must not import packages/server package ({imp}): "
-                            "shared domain must remain isolated from server"
-                        )
-                    if is_client_import:
-                        violations.append(
-                            f"shared production file {path} must not import packages/client package ({imp}): "
-                            "shared domain must remain isolated from client"
-                        )
+                if is_server_import:
+                    violations.append(
+                        f"shared file {path} must not import packages/server package ({imp}): "
+                        "shared domain must remain isolated from server in both production and test files"
+                    )
+                if is_client_import:
+                    violations.append(
+                        f"shared file {path} must not import packages/client package ({imp}): "
+                        "shared domain must remain isolated from client in both production and test files"
+                    )
 
     violations.sort()
     return violations
