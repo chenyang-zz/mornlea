@@ -419,10 +419,27 @@ fn optional_source_tick_preserved_verbatim() {
     let evening = world_state(12_000, 100, Weather::Clear, Season::Spring, 0, 0);
     let mut provider = admitted_mirror(EPOCH);
     commit(&mut provider, player_event(0, morning));
-    commit(&mut provider, player_event(0, evening));
+    // Pure reader evidence: repeated or backward player ticks are not admitted by ingress.
+    let mut observations = provider.observations().to_vec();
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(2), 0)
+                .unwrap(),
+            Some(0),
+            packet(player_event(0, evening)),
+            Vec::new(),
+        )
+        .unwrap(),
+    );
 
     let fixture = view_fixture();
-    let records = project_environment(&fixture.view_of(&provider)).expect("two records project");
+    let records = project_environment(&fixture.view(
+        provider.mirror(),
+        &observations,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(3),
+    ))
+    .expect("two records project");
     assert_eq!(records.len(), 2);
     assert_eq!(
         records[0].record().header().source_tick(),

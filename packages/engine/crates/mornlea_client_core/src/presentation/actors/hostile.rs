@@ -161,6 +161,9 @@ pub fn project_hostile(
             }
             Event::HostileState(states) => {
                 for (ordinal, record) in states.states().iter().enumerate() {
+                    if !observation.actor_record_is_current(ordinal) {
+                        continue;
+                    }
                     let record_ordinal =
                         u32::try_from(ordinal).map_err(|_| ClientError::Capacity)?;
                     let dimension = resolved_dimension(observation, record.id())?;

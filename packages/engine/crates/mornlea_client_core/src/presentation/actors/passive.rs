@@ -155,6 +155,9 @@ pub fn project_passive(
             }
             Event::PassiveState(states) => {
                 for (index, record) in states.states().iter().enumerate() {
+                    if !observation.actor_record_is_current(index) {
+                        continue;
+                    }
                     let record_ordinal = ordinal(index)?;
                     let dimension = resolved_dimension(observation, record.id())?;
                     let entry = ActorRecord::try_new(

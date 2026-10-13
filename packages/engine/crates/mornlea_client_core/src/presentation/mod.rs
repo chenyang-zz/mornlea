@@ -642,6 +642,7 @@ pub struct AcceptedObservation {
     source_tick: Option<u64>,
     packet: mornlea_protocol::ServerPacket,
     resolved: Vec<ResolvedActor>,
+    suppressed_actor_records: Vec<usize>,
 }
 
 /// One prevalidated actor identity resolution: the confirmed live identity a
@@ -694,6 +695,7 @@ impl AcceptedObservation {
             source_tick,
             packet,
             resolved,
+            suppressed_actor_records: Vec::new(),
         })
     }
 
@@ -711,6 +713,23 @@ impl AcceptedObservation {
 
     pub fn resolved(&self) -> &[ResolvedActor] {
         &self.resolved
+    }
+
+    /// Suppression preserves checked packet identity and original record ordinals.
+    pub(crate) fn actor_record_is_current(&self, index: usize) -> bool {
+        self.suppressed_actor_records.binary_search(&index).is_err()
+    }
+
+    /// Mirror staging supplies sorted packet ordinals; publication only reads this mask.
+    pub(crate) fn suppress_actor_records(&mut self, indices: Vec<usize>) {
+        self.suppressed_actor_records = indices.into_boxed_slice().into_vec();
+    }
+
+    pub(crate) fn actor_suppression_bytes(&self) -> Result<usize, ClientError> {
+        self.suppressed_actor_records
+            .capacity()
+            .checked_mul(std::mem::size_of::<usize>())
+            .ok_or(ClientError::Capacity)
     }
 }
 

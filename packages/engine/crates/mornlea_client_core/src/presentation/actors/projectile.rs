@@ -167,6 +167,9 @@ pub fn project_projectile(
             }
             Event::ProjectileState(states) => {
                 for (index, record) in states.states().iter().enumerate() {
+                    if !observation.actor_record_is_current(index) {
+                        continue;
+                    }
                     let record_ordinal = ordinal(index)?;
                     let dimension = resolved_dimension(observation, record.id())?;
                     // Position only: the state record carries no velocity and

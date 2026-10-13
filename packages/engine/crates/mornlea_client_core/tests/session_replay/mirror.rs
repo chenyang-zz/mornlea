@@ -1773,3 +1773,512 @@ fn real_mirror_column_capacity_preserves_prior_payload_revision_and_observations
     assert_eq!(mirror.mirror().world().chunk_count(), 1);
     assert_eq!(mirror.mirror().revision().get(), 3);
 }
+
+fn freshness_commit(
+    mirror: &mut MirrorProvider,
+    packet: ServerPacket,
+) -> Result<ConfirmedRevision, ClientError> {
+    let next = mirror.mirror().revision().get() + 1;
+    mirror.commit(&charged_observation(packet, next))
+}
+
+fn consume_all(mirror: &mut MirrorProvider) {
+    mirror
+        .consume(&PublicationConsumption::try_new(mirror.observations().len(), 0, 0, 0).unwrap())
+        .unwrap();
+}
+
+fn live_spawn(kind: usize, tick: u64, id: u64) -> ServerPacket {
+    match kind {
+        0 => hostile_spawn(tick, HostileId::try_new(id).unwrap()),
+        1 => passive_spawn(tick, PassiveId::try_new(id).unwrap()),
+        2 => projectile_spawn(tick, ProjectileId::try_new(id).unwrap()),
+        3 => companion_spawn(companion(id as u8), tick),
+        4 => drop_upserts(
+            tick,
+            DropId::try_new(0, ChunkPos::new(id as i32, 0), 0, 1).unwrap(),
+        ),
+        5 => remote_spawn(player(id as u8), tick),
+        _ => unreachable!(),
+    }
+}
+
+fn live_state(kind: usize, tick: u64, id: u64) -> ServerPacket {
+    match kind {
+        0 => hostile_state(tick, HostileId::try_new(id).unwrap()),
+        1 => passive_state(tick, PassiveId::try_new(id).unwrap()),
+        2 => projectile_state(tick, ProjectileId::try_new(id).unwrap()),
+        3 => companion_states(tick, companion(id as u8)),
+        5 => remote_states(tick, player(id as u8), Dimension::OVERWORLD),
+        _ => unreachable!(),
+    }
+}
+
+fn live_remove(kind: usize, tick: u64, id: u64) -> ServerPacket {
+    match kind {
+        0 => hostile_despawn(tick, HostileId::try_new(id).unwrap()),
+        1 => passive_despawn(tick, PassiveId::try_new(id).unwrap()),
+        2 => projectile_despawn(tick, ProjectileId::try_new(id).unwrap()),
+        3 => companion_despawn(companion(id as u8)),
+        5 => remote_despawn(player(id as u8)),
+        _ => unreachable!(),
+    }
+}
+
+fn selected_family_mirror(bound: usize) -> MirrorProvider {
+    let l = ClientLimits::try_new().unwrap();
+    let limits = ClientLimits::try_new_with(
+        l.queued_input_events(),
+        l.inbound_observations(),
+        l.inbound_bytes(),
+        l.outbound_commands(),
+        l.outbound_bytes(),
+        l.prediction_journal(),
+        l.message_work(),
+        l.mesh_work(),
+        l.preparation_results(),
+        l.preparation_bytes(),
+        bound,
+        l.frame_bytes(),
+    )
+    .unwrap();
+    let mut mirror = MirrorProvider::new(SessionEpoch::try_new(1).unwrap(), limits).unwrap();
+    mirror.admit().unwrap();
+    mirror
+}
+
+#[test]
+fn freshness_stale_and_equal_player_observations_are_noops_after_consumption() {
+    let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+    freshness_commit(&mut mirror, player_state(12)).unwrap();
+    consume_all(&mut mirror);
+    let before = mirror.mirror().clone();
+    for tick in [11, 12] {
+        assert_eq!(
+            freshness_commit(&mut mirror, player_state(tick)),
+            Ok(before.revision())
+        );
+        assert_eq!(mirror.mirror(), &before);
+        assert!(mirror.observations().is_empty());
+    }
+}
+
+#[test]
+fn freshness_actor_watermarks_survive_consumption_and_retire_with_identity() {
+    for kind in [0, 1, 2, 3, 5] {
+        let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 1)).unwrap();
+        consume_all(&mut mirror);
+        freshness_commit(&mut mirror, live_state(kind, 12, 1)).unwrap();
+        consume_all(&mut mirror);
+        let before = mirror.mirror().clone();
+        for tick in [11, 12] {
+            let expected = if kind == 3 || kind == 5 {
+                Err(ClientError::InvalidInput)
+            } else {
+                Ok(before.revision())
+            };
+            assert_eq!(
+                freshness_commit(&mut mirror, live_state(kind, tick, 1)),
+                expected,
+                "kind {kind} tick {tick}"
+            );
+            assert_eq!(mirror.mirror(), &before);
+            assert!(mirror.observations().is_empty());
+        }
+        freshness_commit(&mut mirror, live_remove(kind, 1, 1)).unwrap();
+        consume_all(&mut mirror);
+        freshness_commit(&mut mirror, live_spawn(kind, 1, 1)).unwrap();
+        consume_all(&mut mirror);
+        freshness_commit(&mut mirror, live_state(kind, 2, 1)).unwrap();
+        let mut reset = MirrorProvider::new(
+            SessionEpoch::try_new(2).unwrap(),
+            ClientLimits::try_new().unwrap(),
+        )
+        .unwrap();
+        reset.admit().unwrap();
+        let key =
+            ObservationKey::try_new(reset.mirror().epoch(), ConfirmedRevision::new(1), 0).unwrap();
+        reset
+            .commit(
+                &AcceptedObservation::try_new(key, None, live_spawn(kind, 1, 1), vec![]).unwrap(),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn freshness_strict_batches_reject_the_fresh_member_with_the_stale_member() {
+    for (kind, stale_id) in [(3, 1), (3, 2), (5, 1), (5, 2)] {
+        let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 1)).unwrap();
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 2)).unwrap();
+        freshness_commit(&mut mirror, live_state(kind, 12, stale_id)).unwrap();
+        consume_all(&mut mirror);
+        let mut batch = live_state(kind, 12, 1);
+        let second = live_state(kind, 12, 2);
+        match (&mut batch, second) {
+            (ServerPacket::CompanionStates(a), ServerPacket::CompanionStates(b)) => {
+                a.states.extend(b.states)
+            }
+            (ServerPacket::RemotePlayerStates(a), ServerPacket::RemotePlayerStates(b)) => {
+                a.players.extend(b.players)
+            }
+            _ => unreachable!(),
+        }
+        let before = mirror.mirror().clone();
+        assert_eq!(
+            freshness_commit(&mut mirror, batch),
+            Err(ClientError::InvalidInput)
+        );
+        assert_eq!(mirror.mirror(), &before);
+        assert!(mirror.observations().is_empty());
+        freshness_commit(&mut mirror, live_state(kind, 11, 3 - stale_id)).unwrap();
+    }
+}
+
+#[test]
+fn freshness_fixed_live_caps_hold_after_every_observation_is_consumed() {
+    for (kind, cap) in [(0, 64), (1, 32), (2, 128), (3, 4), (4, 800)] {
+        let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+        for id in 1..=cap {
+            freshness_commit(&mut mirror, live_spawn(kind, 10, id)).unwrap();
+            consume_all(&mut mirror);
+        }
+        let before = mirror.mirror().clone();
+        let bytes = mirror.held_observation_bytes().unwrap();
+        assert_eq!(
+            freshness_commit(&mut mirror, live_spawn(kind, 100, cap + 1)),
+            Err(ClientError::Capacity),
+            "kind {kind}"
+        );
+        assert_eq!(mirror.mirror(), &before);
+        assert!(mirror.observations().is_empty());
+        assert_eq!(mirror.held_observation_bytes().unwrap(), bytes);
+        if kind != 4 {
+            freshness_commit(&mut mirror, live_remove(kind, 1, 1)).unwrap();
+            consume_all(&mut mirror);
+            freshness_commit(&mut mirror, live_spawn(kind, 1, cap + 1)).unwrap();
+            consume_all(&mut mirror);
+            freshness_commit(&mut mirror, live_state(kind, 2, cap + 1)).unwrap();
+        } else {
+            freshness_commit(&mut mirror, live_spawn(kind, 1, 1)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn freshness_selected_family_bound_limits_all_live_kinds_in_aggregate() {
+    let mut mirror = selected_family_mirror(3);
+    for kind in [0, 1, 5] {
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 1)).unwrap();
+        consume_all(&mut mirror);
+    }
+    let before = mirror.mirror().clone();
+    assert_eq!(
+        freshness_commit(&mut mirror, live_spawn(4, 10, 1)),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &before);
+    assert!(mirror.observations().is_empty());
+    let mut remote = selected_family_mirror(8);
+    for id in 1..=8 {
+        freshness_commit(&mut remote, live_spawn(5, 10, id)).unwrap();
+        consume_all(&mut remote);
+    }
+    assert_eq!(remote.mirror().actors().remote_players().len(), 8);
+    assert_eq!(
+        freshness_commit(&mut remote, live_spawn(5, 10, 9)),
+        Err(ClientError::Capacity)
+    );
+}
+
+#[test]
+fn freshness_refused_future_state_does_not_poison_actor_or_player_ticks() {
+    let l = ClientLimits::try_new().unwrap();
+    let limits = ClientLimits::try_new_with(
+        l.queued_input_events(),
+        1,
+        l.inbound_bytes(),
+        l.outbound_commands(),
+        l.outbound_bytes(),
+        l.prediction_journal(),
+        l.message_work(),
+        l.mesh_work(),
+        l.preparation_results(),
+        l.preparation_bytes(),
+        l.family_records(),
+        l.frame_bytes(),
+    )
+    .unwrap();
+    for kind in [0, 1, 2, 3, 5, 6] {
+        let mut mirror = MirrorProvider::new(SessionEpoch::try_new(1).unwrap(), limits).unwrap();
+        mirror.admit().unwrap();
+        let first = if kind == 6 {
+            player_state(10)
+        } else {
+            live_spawn(kind, 10, 1)
+        };
+        freshness_commit(&mut mirror, first).unwrap();
+        let future = if kind == 6 {
+            player_state(100)
+        } else {
+            live_state(kind, 100, 1)
+        };
+        assert_eq!(
+            freshness_commit(&mut mirror, future),
+            Err(ClientError::Capacity)
+        );
+        consume_all(&mut mirror);
+        let lower = if kind == 6 {
+            player_state(11)
+        } else {
+            live_state(kind, 11, 1)
+        };
+        assert_eq!(
+            freshness_commit(&mut mirror, lower),
+            Ok(ConfirmedRevision::new(2))
+        );
+    }
+}
+
+#[test]
+fn freshness_mixed_actor_states_preserve_original_packet_and_projection_ordinals() {
+    use mornlea_client_core::input::InputProjectionState;
+    use mornlea_client_core::presentation::actors::{
+        hostile::project_hostile, passive::project_passive, projectile::project_projectile,
+    };
+    use mornlea_client_core::presentation::{Pose, ProducerIdentity};
+    use mornlea_client_core::{
+        AudioProjectionState, DiagnosticProjectionState, ErrorClassCounters,
+        LifecycleProjectionState, MovementIntent, PlayerProjectionState, ProjectionOrder,
+        ProjectionView, QueueCounters,
+    };
+    for (kind, stale_id) in [(0, 1), (0, 2), (1, 1), (1, 2), (2, 1), (2, 2)] {
+        let mut mirror = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 1)).unwrap();
+        freshness_commit(&mut mirror, live_spawn(kind, 10, 2)).unwrap();
+        freshness_commit(&mut mirror, live_state(kind, 12, stale_id)).unwrap();
+        consume_all(&mut mirror);
+        let mut mixed = live_state(kind, 12, 1);
+        let second = live_state(kind, 12, 2);
+        match (&mut mixed, second) {
+            (ServerPacket::HostileState(a), ServerPacket::HostileState(b)) => {
+                a.states.extend(b.states)
+            }
+            (ServerPacket::PassiveState(a), ServerPacket::PassiveState(b)) => {
+                a.states.extend(b.states)
+            }
+            (ServerPacket::ProjectileState(a), ServerPacket::ProjectileState(b)) => {
+                a.states.extend(b.states)
+            }
+            _ => unreachable!(),
+        }
+        freshness_commit(&mut mirror, mixed.clone()).unwrap();
+        assert_eq!(mirror.mirror().revision(), ConfirmedRevision::new(4));
+        assert_eq!(mirror.observations()[0].packet(), &mixed);
+        assert_eq!(mirror.observations()[0].resolved().len(), 1);
+        let epoch = mirror.mirror().epoch();
+        let revision = mirror.mirror().revision();
+        let input = InputProjectionState::try_new(1).unwrap();
+        let player = PlayerProjectionState::try_new(
+            epoch,
+            revision,
+            Pose::try_new([0.0, 64.0, 0.0], 0.0, 0.0).unwrap(),
+            None,
+            vec![],
+            None,
+            None,
+            MovementIntent::try_new(None, false).unwrap(),
+        )
+        .unwrap();
+        let audio = AudioProjectionState::try_new().unwrap();
+        let lifecycle = LifecycleProjectionState::try_new(1).unwrap();
+        let diagnostics = DiagnosticProjectionState::try_new(
+            ProducerIdentity::try_new([0; 20], [0; 32]).unwrap(),
+            QueueCounters::default(),
+            ErrorClassCounters::default(),
+        )
+        .unwrap();
+        let limits = ClientLimits::try_new().unwrap();
+        let view = ProjectionView::try_new(
+            mirror.mirror(),
+            mirror.observations(),
+            &input,
+            &player,
+            &audio,
+            &lifecycle,
+            &diagnostics,
+            epoch,
+            revision,
+            1,
+            &limits,
+        )
+        .unwrap();
+        let records = match kind {
+            0 => project_hostile(&view),
+            1 => project_passive(&view),
+            2 => project_projectile(&view),
+            _ => unreachable!(),
+        }
+        .unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(matches!(
+            records[0].order(),
+            ProjectionOrder::Confirmed {
+                record_ordinal,
+                ..
+            } if *record_ordinal == (2 - stale_id) as u32
+        ));
+        assert_eq!(records[0].record().header().source_tick(), Some(12));
+        let held = mirror.held_observation_bytes().unwrap();
+        let dynamic = std::mem::size_of_val(mirror.observations()[0].resolved())
+            + 2 * match &mixed {
+                ServerPacket::HostileState(_) => std::mem::size_of::<HostileStateRecord>(),
+                ServerPacket::PassiveState(_) => std::mem::size_of::<PassiveStateRecord>(),
+                ServerPacket::ProjectileState(_) => std::mem::size_of::<ProjectileStateRecord>(),
+                _ => unreachable!(),
+            };
+        consume_all(&mut mirror);
+        assert_eq!(
+            held - mirror.held_observation_bytes().unwrap(),
+            dynamic + std::mem::size_of::<usize>()
+        );
+    }
+}
+
+#[test]
+fn freshness_suppression_byte_refusal_preserves_the_unpublished_watermark() {
+    fn prepare(mirror: &mut MirrorProvider) {
+        for packet in [
+            live_spawn(0, 10, 1),
+            live_spawn(0, 10, 2),
+            live_state(0, 12, 1),
+        ] {
+            freshness_commit(mirror, packet).unwrap();
+            consume_all(mirror);
+        }
+    }
+    let mut mixed = live_state(0, 12, 1);
+    let ServerPacket::HostileState(second) = live_state(0, 12, 2) else {
+        unreachable!()
+    };
+    let ServerPacket::HostileState(first) = &mut mixed else {
+        unreachable!()
+    };
+    first.states.extend(second.states);
+    let mut measured = byte_limited_mirror(ClientLimits::MAX_INBOUND_BYTES);
+    prepare(&mut measured);
+    freshness_commit(&mut measured, mixed.clone()).unwrap();
+    let bytes = measured.held_observation_bytes().unwrap();
+    let mut mirror = byte_limited_mirror(bytes - 1);
+    prepare(&mut mirror);
+    let before = mirror.mirror().clone();
+    let held = mirror.held_observation_bytes().unwrap();
+    assert_eq!(
+        freshness_commit(&mut mirror, mixed),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &before);
+    assert!(mirror.observations().is_empty());
+    assert_eq!(mirror.held_observation_bytes().unwrap(), held);
+    freshness_commit(&mut mirror, live_state(0, 11, 2)).unwrap();
+}
+
+#[test]
+fn freshness_multi_spawn_capacity_rejects_every_member_atomically() {
+    let mut mirror = selected_family_mirror(3);
+    for id in [1, 2] {
+        freshness_commit(&mut mirror, live_spawn(0, 10, id)).unwrap();
+        consume_all(&mut mirror);
+    }
+    let mut batch = live_spawn(0, 100, 3);
+    let ServerPacket::HostileSpawn(second) = live_spawn(0, 100, 4) else {
+        unreachable!()
+    };
+    let ServerPacket::HostileSpawn(first) = &mut batch else {
+        unreachable!()
+    };
+    first.spawns.extend(second.spawns);
+    let before = mirror.mirror().clone();
+    assert_eq!(
+        freshness_commit(&mut mirror, batch),
+        Err(ClientError::Capacity)
+    );
+    assert_eq!(mirror.mirror(), &before);
+    assert!(mirror.observations().is_empty());
+    freshness_commit(&mut mirror, live_spawn(0, 1, 3)).unwrap();
+    consume_all(&mut mirror);
+    freshness_commit(&mut mirror, live_state(0, 2, 3)).unwrap();
+}
+
+#[test]
+fn freshness_seeded_mirrors_obey_fixed_and_selected_live_caps() {
+    use mornlea_client_core::session::ActorConfirmed;
+    let epoch = SessionEpoch::try_new(1).unwrap();
+    let frozen = ClientLimits::try_new().unwrap();
+    for (kind, cap) in [(0, 64), (1, 32), (2, 128), (3, 4), (4, 800)] {
+        let mut actors = ActorConfirmed::try_new().unwrap();
+        for id in 1..=cap + 1 {
+            actors =
+                match kind {
+                    0 => actors.with_hostile(HostileId::try_new(id).unwrap(), Dimension::OVERWORLD),
+                    1 => actors.with_passive(PassiveId::try_new(id).unwrap(), Dimension::OVERWORLD),
+                    2 => actors
+                        .with_projectile(ProjectileId::try_new(id).unwrap(), Dimension::OVERWORLD),
+                    3 => actors.with_companion(companion(id as u8), Dimension::OVERWORLD),
+                    4 => actors
+                        .with_drop(DropId::try_new(0, ChunkPos::new(id as i32, 0), 0, 1).unwrap()),
+                    _ => unreachable!(),
+                };
+            if id == cap || id == cap + 1 {
+                let mut parts = ConfirmedMirrorParts::pending(epoch);
+                parts.actors = Some(actors.clone());
+                let result = MirrorProvider::from_parts(parts, frozen);
+                if id == cap {
+                    assert!(result.is_ok(), "kind {kind} exact cap");
+                } else {
+                    assert_eq!(
+                        result.err(),
+                        Some(ClientError::Capacity),
+                        "kind {kind} cap plus one"
+                    );
+                }
+            }
+        }
+    }
+    let selected = ClientLimits::try_new_with(
+        frozen.queued_input_events(),
+        frozen.inbound_observations(),
+        frozen.inbound_bytes(),
+        frozen.outbound_commands(),
+        frozen.outbound_bytes(),
+        frozen.prediction_journal(),
+        frozen.message_work(),
+        frozen.mesh_work(),
+        frozen.preparation_results(),
+        frozen.preparation_bytes(),
+        2,
+        frozen.frame_bytes(),
+    )
+    .unwrap();
+    for actors in [
+        ActorConfirmed::try_new()
+            .unwrap()
+            .with_remote_player(player(1), Dimension::OVERWORLD)
+            .with_remote_player(player(2), Dimension::OVERWORLD)
+            .with_remote_player(player(3), Dimension::OVERWORLD),
+        ActorConfirmed::try_new()
+            .unwrap()
+            .with_hostile(HostileId::try_new(1).unwrap(), Dimension::OVERWORLD)
+            .with_passive(PassiveId::try_new(1).unwrap(), Dimension::OVERWORLD)
+            .with_drop(DropId::try_new(0, ChunkPos::new(0, 0), 0, 1).unwrap()),
+    ] {
+        let mut parts = ConfirmedMirrorParts::pending(epoch);
+        parts.actors = Some(actors);
+        assert_eq!(
+            MirrorProvider::from_parts(parts, selected).err(),
+            Some(ClientError::Capacity)
+        );
+    }
+}

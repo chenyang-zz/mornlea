@@ -690,15 +690,60 @@ fn interleaved_equal_and_absent_ticks_keep_private_source_order() {
     );
     commit(&mut provider, drop_upserts_event(equal_tick, drop));
     commit(&mut provider, remote_despawn_event(player));
-    commit(
-        &mut provider,
-        hostile_state_event(equal_tick, hostile, [2.5, 65.5, 2.5]),
+    // Pure reader evidence: ingress suppresses the equal hostile tick; readers preserve input order.
+    let mut observations = provider.observations().to_vec();
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(5), 0)
+                .unwrap(),
+            Some(equal_tick),
+            packet(hostile_state_event(equal_tick, hostile, [2.5, 65.5, 2.5])),
+            vec![
+                mornlea_client_core::presentation::ResolvedActor::try_new(
+                    ActorKind::Hostile,
+                    ActorId::Hostile(hostile),
+                    Dimension::OVERWORLD,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
     );
-    commit(&mut provider, drop_removes_event(equal_tick, drop));
+    observations.push(
+        AcceptedObservation::try_new(
+            ObservationKey::try_new(provider.mirror().epoch(), ConfirmedRevision::new(6), 0)
+                .unwrap(),
+            Some(equal_tick),
+            packet(drop_removes_event(equal_tick, drop)),
+            Vec::new(),
+        )
+        .unwrap(),
+    );
 
     let fixture = view_fixture();
     let limits = ClientLimits::try_new().expect("limits");
-    let assembled = assemble(&fixture, &provider, &limits).expect("interleaved family assembles");
+    let view = ProjectionView::try_new(
+        provider.mirror(),
+        &observations,
+        &fixture.input,
+        &fixture.player,
+        &fixture.audio,
+        &fixture.lifecycle,
+        &fixture.diagnostics,
+        provider.mirror().epoch(),
+        ConfirmedRevision::new(7),
+        5,
+        &fixture.limits,
+    )
+    .unwrap();
+    let assembled = assemble_actors(
+        view.frame_epoch(),
+        view.frame_revision(),
+        provider_parts(&view),
+        &limits,
+        &observations,
+    )
+    .expect("interleaved family assembles");
     assert_eq!(assembled.len(), 6);
 
     let expected = [
