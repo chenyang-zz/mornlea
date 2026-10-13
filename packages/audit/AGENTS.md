@@ -1,33 +1,31 @@
-# 审计单元指南（packages/audit）
+# Mornlea Audit Package Guide (`packages/audit`)
 
-## 作用域
+## Purpose
 
-本文件补充仓库根 `AGENTS.md`，适用于 `packages/audit`（Go 包名保持
-`archcheck`，模块 `github.com/channing771/mornlea/packages/audit`）。本单元是
-仓库的架构门禁测试集：依赖方向、单元 require 边界、身份扫描与基线版本一致
-性全部住在这里。原 `internal/` 过渡指南已随根模块解散并入本文件。
+This document supplements the root `AGENTS.md` for `packages/audit`. `packages/audit` is a standalone Python package (`mornlea-audit`) that provides repository-wide cross-module architectural, governance, and documentation gates executed via `pytest`.
 
-## 单元边界
+## Directory Map
 
-- 审计单元是跨模块的枚举校验者，只以 `go list`、读文件与源码 AST 的方式观察
-  被审单元；本单元 MUST NOT require 或 import shared、server、client、tools、
-  contracts 的任何包——住进任何依赖边都会失去审计资格（由
-  `unit_boundary_test.go` 的单元 require 表强制，audit 是叶子单元）。
-- 包级依赖方向的唯一真相是本包 `dependency_test.go` 的 `allowed` 表；文档与
-  其他指南不得复制该表。新增包或依赖边必须先证明方向合理并同步架构门禁。
-- 枚举一律经 `workspaceModules`（解析根 `go.work` 的 use 列表）跨模块执行：
-  根模块已解散，仓库根的 `./...` 不可用且模式本就不跨嵌套模块；新单元模块
-  立项必须同时登记 go.work use，否则 `TestWorkspaceUseSetMatchesUnitModules`
-  与各枚举检查报红。
-- The comment collector excludes the declared third-party installation at
-  `apps/mornlea-godot/addons/py4godot`. Project-owned addons and same-named
-  directories elsewhere remain audited; ignored status alone is no exemption.
+- `audit/`: Core verification logic and static scanners.
+  - `audit/dependencies.py`: Direct and transitive package import allowlists and one-way dependency rules.
+  - `audit/boundaries.py`: Module require boundary enforcement across `packages/*/go.mod` and server/client source isolation guards.
+  - `audit/documentation.py`: Documentation manifest classification, bilingual pair synchronization, markdown links, and version baseline validation.
+  - `audit/comments.py`: English prose and comment language policy enforcement.
+  - `audit/workspace.py`: Root `go.work` module membership and alignment checks.
+  - `audit/common.py`: Shared repository path resolution and execution helpers.
+- `tests/`: Test suites corresponding to each architectural gate.
+- `pyproject.toml`: Package definition and tool configurations for `pytest`.
 
-## 定点验证
+## Ownership and Boundary
 
-- 依赖边界与全部架构守卫：`go test ./packages/audit -count=1`。
-- `packages/tools/cmd/runtime-oracle` production sources stay stdlib-only; test
-  files may import `packages/server/storage/storagedef` for save error-class
-  checks. That import is whitelisted only in `dependency_test.go`
-  `oracleAllowedTestImports` and is enforced by
-  `TestRuntimeOracleInternalDependencies`.
+- The audit package is an external, read-only observer across repository modules. It inspects units via `go list`, file system traversal, regex parsing, and AST scanners.
+- It MUST NOT import Go packages, runtime internals, or depend on game simulation state.
+- Allowed package dependency directions are authoritatively defined in `audit/dependencies.py`.
+- Module require directions are authoritatively defined in `audit/boundaries.py`.
+- The comment collector excludes declared third-party installations such as `apps/mornlea-godot/addons/py4godot`. Project-owned addons and directories elsewhere remain audited.
+- Production sources in `packages/tools/cmd/runtime-oracle` stay stdlib-only; test files may import `packages/server/storage/storagedef` for save error-class checks as whitelisted in `audit/dependencies.py` (`ORACLE_ALLOWED_TEST_IMPORTS`).
+
+## Focused Validation
+
+- Complete architectural and governance test suite: `make archcheck` or `uv run pytest packages/audit`.
+- Focused comment language check: `make comment-language-check` or `uv run pytest packages/audit/tests/test_comments.py`.

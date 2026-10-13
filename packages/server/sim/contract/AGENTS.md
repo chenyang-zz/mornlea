@@ -22,4 +22,4 @@
 ## 定点验证
 
 - `go test ./packages/server/sim/contract -race -count=1`
-- 依赖边界：`go test ./packages/audit -count=1`
+- 依赖边界：`make archcheck`

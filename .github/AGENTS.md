@@ -31,7 +31,7 @@ Update the executable workflow audits with graph, environment, or artifact contr
 Run from the repository root:
 
 ```bash
-go test ./packages/audit -run 'Test(RequiredCIWorkflow|CompanionAgentCI|EnglishCommentGateIntegration|MornleaCurrentIdentity)' -count=1
+uv run pytest packages/audit/tests/test_ci_workflows.py
 ```
 
-`TestRequiredCIWorkflow` parses YAML with `gopkg.in/yaml.v3` before checking policy and mutations. Also parse changed workflow YAML independently where a YAML parser is available. Full audit and the optional Godot rollback check cover cross-workflow changes; tiering follows `docs/notes/test-quickstart.md`.
+The CI workflow tests parse YAML with PyYAML before checking policy and mutations. Also parse changed workflow YAML independently where a YAML parser is available. Full audit and the optional Godot rollback check cover cross-workflow changes; tiering follows `docs/notes/test-quickstart.md`.

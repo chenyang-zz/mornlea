@@ -94,4 +94,4 @@
 - 定点测试：`go test ./packages/shared/network/protocol -race -count=1`。
 - 协议演进（ID/Validate/版本变更连带 codec 与传输）：
   `go test ./packages/shared/network/... -race -count=1`。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

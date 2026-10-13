@@ -53,4 +53,4 @@
 
 - 定点测试：`go test ./packages/server/storage/region -race -count=1`（纯格式
   原语，秒级，不编译执行其他域的测试）。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

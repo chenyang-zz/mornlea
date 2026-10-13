@@ -57,7 +57,7 @@ Use these sections in order. Domain-appropriate names are allowed, but their res
 - [ ] Numeric values either carry a dated measurement qualifier or defer to code/tests.
 - [ ] Parent and child guides do not duplicate rules; cross-package constraints occur only in the overview.
 - [ ] `CLAUDE.md` exists only at repository and subtree roots, is byte-identical to the template, and is registered in `claudeImportDocs`; package directories contain no `CLAUDE.md`.
-- [ ] `go test ./packages/audit -count=1` passes for thin imports, backticks, and dependency guards.
+- [ ] `make archcheck` passes for thin imports, backticks, and dependency guards.
 - [ ] No task identifier appears; normative prose is English and identifiers keep exact spelling.
 
 ## Examples

@@ -97,7 +97,7 @@ helper 落位规则与验收清单都在这里。条文是原则，本文件是�
 - [ ] 生产文件、`testdata/`、golden 零改动（`git diff --stat` 只含 `*_test.go`）；
 - [ ] 注释零信息损失（被拆文件头说明的每句话都在某个新文件里有落点）；
 - [ ] `gofmt -l <pkg>` 无输出、`go vet ./<pkg>`、`go test ./<pkg> -race -count=1`；
-- [ ] 改动 Go 文件后 `go test ./packages/audit -count=1`。
+- [ ] 改动 Go 文件后 `make archcheck`。
 
 ## 范例
 

@@ -97,4 +97,4 @@ region 包：`Region.Save`/`Region.Load` 直接调用本包信封编解码并经
 
 - 定点测试：`go test ./packages/server/storage/chunk -race -count=1`（本子树最大
   的域，含崩溃子进程与压缩用例；快速迭代可加 `-short`）。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

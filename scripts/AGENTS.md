@@ -12,7 +12,7 @@ Hook、gate、发布和 agent 自动化脚本改变的是仓库开发契约，�
 
 ## Gate 现状
 
-`scripts/agents/gates.sh` 当前依次运行 gofmt 检查、逐 workspace 模块的 `go vet` 与 archcheck（`go test ./packages/audit -count=1`）、OpenSpec strict 校验、`make rust`，并在未设置 `GATES_SKIP_RACE=1` 时逐模块运行全量 race。它不包含 `make rust-check`，文档和输出不得宣称已经执行该门禁。
+`scripts/agents/gates.sh` 当前依次运行 gofmt 检查、逐 workspace 模块的 `go vet`、注释语言检查、archcheck（`uv run pytest packages/audit`）、OpenSpec strict 校验、`make rust`，并在未设置 `GATES_SKIP_RACE=1` 时逐模块运行全量 race。它不包含 `make rust-check`，文档和输出不得宣称已经执行该门禁。
 
 修改 shell 脚本时运行对应的 focused shell check；修改 Node 脚本时运行对应的 focused Node check。本指南只记录现状，不修改任何脚本。
 

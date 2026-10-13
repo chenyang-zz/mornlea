@@ -312,10 +312,14 @@
     },
     {
       "id": "test-quickstart",
-      "classification": "legacy",
+      "classification": "bilingual",
       "paths": [
-        "docs/notes/test-quickstart.md"
-      ]
+        "docs/notes/test-quickstart.md",
+        "docs/notes/test-quickstart.zh.md"
+      ],
+      "english_path": "docs/notes/test-quickstart.md",
+      "chinese_path": "docs/notes/test-quickstart.zh.md",
+      "revision": "2026-10-13.1"
     },
     {
       "id": "visual-verification-guide",

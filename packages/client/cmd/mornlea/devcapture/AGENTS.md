@@ -69,4 +69,4 @@ capture/benchmark；app 也不反向导入本包（方向由
 
 - 定点测试：`go test ./packages/client/cmd/mornlea/devcapture -race -count=1`（`httptest`
   全覆盖，秒级）。
-- 依赖方向 / 文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向 / 文档守卫：`make archcheck`。

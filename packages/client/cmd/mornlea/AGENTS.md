@@ -42,7 +42,7 @@ packages/client/cmd/mornlea/
   导入 capture/benchmark。
 - 跨单元边：本子树是 client 模块中唯一允许 import `packages/server` 的位置
   （app/benchmark 在进程内装配本地权威 Host）；client 域库包对 server 的禁令
-  由 `packages/audit/server_client_boundary_test.go` 强制。
+  由 `packages/audit/audit/boundaries.py` 强制。
 
 ## Entry Modes
 
@@ -100,4 +100,4 @@ WebView 组件；采掘不再有屏幕进度条，其进度反馈由世界空间
 | capture 视觉 | `go test ./packages/client/cmd/mornlea/capture -race -count=1`；无窗口视觉 `make visual-check` |
 | benchmark 性能 | `go test ./packages/client/cmd/mornlea/benchmark -race -count=1`；多人门禁 `make test-multiplayer` |
 | devcapture 捕获服务 | `go test ./packages/client/cmd/mornlea/devcapture -race -count=1` |
-| 依赖方向 / 文档守卫 | `go test ./packages/audit -count=1` |
+| 依赖方向 / 文档守卫 | `make archcheck` |

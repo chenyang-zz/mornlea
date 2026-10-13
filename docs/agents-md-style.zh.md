@@ -99,7 +99,7 @@ counterpart: agents-md-style.md
 - [ ] 与父级/子级指南无重复条文；跨包约束只在总纲出现一次
 - [ ] `CLAUDE.md` 只存在于仓库根与子树根且逐字节等于模板、已登记
       `claudeImportDocs`；子包目录无 `CLAUDE.md`
-- [ ] `go test ./packages/audit -count=1` 全绿（薄导入、反引号、依赖
+- [ ] `make archcheck` 全绿（薄导入、反引号、依赖
       方向守卫）
 - [ ] 无任务编号；规范正文使用英文，标识符保持精确拼写
 

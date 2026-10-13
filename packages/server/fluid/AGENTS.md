@@ -5,8 +5,8 @@
 `openspec/specs/authoritative-fluid/spec.md` 与
 `openspec/specs/fluid-survival/spec.md`，Go/Rust 分工纪律见
 `docs/notes/go-rust-division.md`。依赖方向：只允许 `packages/server/updates`、
-`packages/shared/core` 与 `packages/shared/nativeabi`（`packages/audit` 的
-`dependency_test.go` allowed 表强制）；tunable 一律由调用方传参，本包不定义、
+`packages/shared/core` 与 `packages/shared/nativeabi`（`packages/audit/audit/dependencies.py`
+的 `allowed` 表强制）；tunable 一律由调用方传参，本包不定义、
 不读取任何隐藏默认值。
 
 ## 生产路径只经 native kernel (`fluid/eval_native.go`, `fluid/rescan_native.go`)

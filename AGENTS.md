@@ -6,7 +6,7 @@ Agent guidance accumulates along the ancestor chain. The nearest `AGENTS.md` add
 
 ## Project and contracts
 
-Mornlea's current production implementation is an independent voxel game written primarily in Go 1.26. The root `go.work` coordinates six modules: `packages/contracts`, `packages/shared`, `packages/server`, `packages/client`, `packages/tools`, and `packages/audit`; each module path begins with `github.com/channing771/mornlea/packages/<unit>`, and the repository root is not a Go module. The repository contains the custom client, authoritative server, world storage, physics, the Rust `mornlea_engine` numerical engine, and the Rust `mornlea_client` wgpu renderer. The intended final runtime is documented in [`docs/architecture-target.md`](docs/architecture-target.md): Rust owns the real-time server and client core, while Godot uses embedded Python for presentation. It is not compatible with the official Minecraft protocol, saves, or copyrighted assets.
+Mornlea's current production implementation is an independent voxel game written primarily in Go 1.26. The root `go.work` coordinates five Go modules: `packages/contracts`, `packages/shared`, `packages/server`, `packages/client`, and `packages/tools`; each module path begins with `github.com/channing771/mornlea/packages/<unit>`, and the repository root is not a Go module. Architectural and governance gates are owned by the standalone Python package `packages/audit` (tested via `pytest`). The repository contains the custom client, authoritative server, world storage, physics, the Rust `mornlea_engine` numerical engine, and the Rust `mornlea_client` wgpu renderer. The intended final runtime is documented in [`docs/architecture-target.md`](docs/architecture-target.md): Rust owns the real-time server and client core, while Godot uses embedded Python for presentation. It is not compatible with the official Minecraft protocol, saves, or copyrighted assets.
 
 The current baseline is protocol v45, player schema v9, chunk schema v9, world metadata v6, standalone `companions.ai` schema v5, standalone `hostile_mobs` schema v2, standalone `passive_mobs` schema v1, engine ABI v11, client ABI v19, and benchmark scenario v23.
 
@@ -111,7 +111,7 @@ make rust
 make companion-agent-check
 make companion-agent-integration
 go test ./path/to/affected/package -race -count=1
-go test ./packages/audit -count=1
+make archcheck
 make dev-check
 make test-race-changed
 make test-race

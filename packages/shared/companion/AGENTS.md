@@ -38,5 +38,5 @@ must not import each other, enforced by `packages/audit` `TestInternalDependenci
 ```bash
 go test ./packages/shared/companion -race -count=1
 go test ./packages/shared/companion -run '^Test(AgentContractCorpus|CompanionExport)' -count=1
-go test ./packages/audit -count=1
+make archcheck
 ```

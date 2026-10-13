@@ -61,7 +61,7 @@ Terminal Dialogue first returns an uncommitted proposal. After revalidation at t
 - `packages/client` is the client-domain Go module (a separate `go.mod` and a `go.work` member). `client` owns client mirrors, input prediction, message receipt, the client ABI bridge, and CPU-side render orchestration. `render` (plus `hud`), `mesh`, `assets`, `lod`, `audio`, `packages/shared/worldgen`, and `packages/server/fluid` provide domain-data descriptions, CPU encoding, and Rust-call orchestration; they own neither a GPU backend nor a second production numerical implementation. `packages/client/cmd/mornlea` is the graphical client entry point; `app` and `benchmark` assemble a local authoritative Host in process and are the only locations in this module permitted to import `packages/server`.
 - `packages/audit` source guards enforce two exempt edges between server and client modules: server production files cannot import client (the client mirror for Memory/TCP integration occurs only in `_test.go`), and client-domain library files cannot import server (server assembly belongs only to `packages/client/cmd/mornlea`).
 
-The `allowed` table in `packages/audit/dependency_test.go` is authoritative for permitted direct internal dependencies. `packages/audit` also uses `TestSimAuthorityStateOwnershipStaysExplicit` to scan runtime package variables and holders, binding the sole mutation/commit to the actual `StepWithTunables` call path, and `TestAuthorityTickTunablesStayExplicit` to keep authoritative-tick parameter capture and forwarding explicit. Other gates protect the absence of Go WebGPU dependencies, the headless-server closure, companion Agent-service publication boundaries, Make/CI gates, and long-lived version baselines. This document deliberately does not copy a dependency allowlist that evolves with packages.
+The `allowed` table in `packages/audit/audit/dependencies.py` is authoritative for permitted direct internal dependencies. `packages/audit` also uses `TestSimAuthorityStateOwnershipStaysExplicit` to scan runtime package variables and holders, binding the sole mutation/commit to the actual `StepWithTunables` call path, and `TestAuthorityTickTunablesStayExplicit` to keep authoritative-tick parameter capture and forwarding explicit. Other gates protect the absence of Go WebGPU dependencies, the headless-server closure, companion Agent-service publication boundaries, Make/CI gates, and long-lived version baselines. This document deliberately does not copy a dependency allowlist that evolves with packages.
 
 ## 6. `mornlea_engine` / engine ABI v11
 
@@ -146,7 +146,7 @@ Code, tests, and [`openspec/specs/`](../openspec/specs/) define current observab
 │   │   ├── agent-board/    AI worker execution-status board (web is a React frontend)
 │   │   ├── gfxspike/       Rust-renderer terrain rendering verification program
 │   │   └── composite_grass_side/ Grass-block side texture compositor
-│   ├── audit/              Audit module (a go.work workspace member): architecture gate tests (package archcheck; dependency direction, unit boundaries, identity, and baseline versions)
+│   ├── audit/              Standalone Python audit package: architecture and governance gate tests (dependency direction, unit boundaries, identity, and baseline versions)
 │   └── engine/
 │       └── crates/
 │           ├── mornlea_engine/ Pinned Rust 1.97.1 cdylib: mesh/light/collision/raycast/physics/worldgen/lod/fluid

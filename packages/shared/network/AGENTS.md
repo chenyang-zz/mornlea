@@ -26,9 +26,9 @@ packages/shared/network/
 
 ## Dependency Direction
 
-依赖方向单向，由 `packages/audit/dependency_test.go` 的 `allowed` 表
-登记并以 `TestInternalDependenciesAreOneWay` 强制（`go list` 枚举 go.work
-六模块全部内部包的生产 import 逐边比对；未登记的
+依赖方向单向，由 `packages/audit/audit/dependencies.py` 的 `allowed` 表
+登记并以依赖检查强制（`go list` 枚举 go.work
+五个模块全部内部包的生产 import 逐边比对；未登记的
 新包直接报错）。契约文本见 openspec 主规格 `repository-code-organization`。
 
 - 接受：根包 → {`packages/shared/core`, `packages/shared/network/protocol`,
@@ -81,7 +81,7 @@ packages/shared/network/
   子包细节不回写总纲。
 - 长度上限、版本号、超时预算一律以代码常量与性质测试为准，指南只点名
   常量与测试，不抄数值。
-- 网络子包布局或依赖边变化时，同步 `packages/audit/dependency_test.go`
+- 网络子包布局或依赖边变化时，同步 `packages/audit/audit/dependencies.py`
   的 `allowed` 表与 openspec 主规格 `repository-code-organization`，三者
   不一致即漂移。
 
@@ -96,6 +96,6 @@ packages/shared/network/
 | codec 编解码与帧 | `go test ./packages/shared/network/codec -race -count=1` |
 | tcp transport | `go test ./packages/shared/network/tcp -race -count=1` |
 | 全子树（跨域改动） | `go test ./packages/shared/network/... -race -count=1` |
-| 依赖方向 / 文档守卫 | `go test ./packages/audit -count=1` |
+| 依赖方向 / 文档守卫 | `make archcheck` |
 
 - 当前文档入口：`docs/notes/lan-server.md`（TCP 可信局域网信任边界与部署约束）。

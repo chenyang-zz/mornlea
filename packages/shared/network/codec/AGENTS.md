@@ -104,4 +104,4 @@ zstd 压缩的 chunk snapshot 编解码、长度前缀帧封装与字节原语�
 - fuzz 冒烟（改动 wire 布局时）：`go test ./packages/shared/network/codec -fuzz
   FuzzSmallPacketCodec -fuzztime 10s`（其余入口同式，性能数值只记录）。
 - 协议演进连带传输与登录：`go test ./packages/shared/network/... -race -count=1`。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

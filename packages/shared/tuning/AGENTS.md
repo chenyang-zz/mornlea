@@ -24,4 +24,4 @@
 
 - `go test ./packages/shared/tuning -race -count=1`
 - 关联：`go test ./packages/shared/config -race -count=1`（配置装配）
-- 依赖边界：`go test ./packages/audit -count=1`
+- 依赖边界：`make archcheck`

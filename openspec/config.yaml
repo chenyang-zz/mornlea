@@ -1,12 +1,12 @@
 schema: spec-driven
 
 context: |
-  Project: Mornlea is an independent voxel game written in Go 1.26. The root `go.work` coordinates six modules (`packages/contracts`, `packages/shared`, `packages/server`, `packages/client`, `packages/tools`, and `packages/audit`), each with module path prefix `github.com/channing771/mornlea/packages/<unit>`; the repository root is not a Go module. The project is not compatible with the official Minecraft protocol, saves, or copyrighted assets.
+  Project: Mornlea is an independent voxel game written in Go 1.26. The root `go.work` coordinates five Go modules (`packages/contracts`, `packages/shared`, `packages/server`, `packages/client`, `packages/tools`), each with module path prefix `github.com/channing771/mornlea/packages/<unit>`, with architectural gates in Python unit `packages/audit`; the repository root is not a Go module. The project is not compatible with the official Minecraft protocol, saves, or copyrighted assets.
   Current version matrix: protocol v45, player schema v9, chunk schema v9, world metadata v6, standalone `companions.ai` schema v5, standalone `hostile_mobs` schema v2, standalone `passive_mobs` schema v1, engine ABI v11, client ABI v19, and benchmark scenario v23.
   Authority boundary: the server is the sole authority for world and player state; clients hold only mirrors, predictions, and presentation state. Local Memory and remote TCP modes are constrained by the same packet/codec contracts and reuse the same login, session, and authoritative simulation paths.
   Language ownership: the current production path is Go for app, world, simulation, network, storage, and the CPU half of rendering, with Rust `mornlea_engine` for numerical computation and Rust `mornlea_client` for Darwin windows/events/GPU rendering. The target path in `docs/architecture-target.md` moves the real-time server and client core to Rust and keeps Godot's qualified embedded Python as the presentation language; Go and the current Python/Go pilot seams are migration exceptions only.
   ABI boundary: only `packages/shared/nativeabi` touches the engine ABI, and only `packages/client/client` touches the client ABI. Domain packages call Rust through the established bridges.
-  Architecture constraints: internal package dependencies are defined by `packages/audit/dependency_test.go`; no Go package may import WebGPU bindings. A message and its slices are immutable after a successful cross-goroutine send. Authoritative tick, render, and network hot paths must not perform unbounded work or blocking I/O.
+  Architecture constraints: internal package dependencies are defined in `packages/audit/audit/dependencies.py`; no Go package may import WebGPU bindings. A message and its slices are immutable after a successful cross-goroutine send. Authoritative tick, render, and network hot paths must not perform unbounded work or blocking I/O.
   Asset boundary: do not add Mojang copyrighted textures or other unauthorized binary art assets. Do not relax gates for real overflow, data loss, report identity, or I/O failures.
   Authoritative entry points: current behavior is defined by code, tests, and `openspec/specs/`. Current architecture is documented in `docs/architecture.md`; new architecture direction is documented in `docs/architecture-target.md`; the documentation map is `docs/README.md`, and implementation chronology is `docs/notes/progress.md`. `docs/superpowers/` and archived changes are historical evidence only.
 
@@ -32,7 +32,7 @@ rules:
     - Decompose broad milestones into independently testable nodes; self-review requirement coverage, acyclic dependencies, matching types and missing boundary cases. Do not leave catch-all tasks or controller-held design placeholders in a completed implementation plan.
     - Write in English and split work into ordered, independently verifiable checkboxes; keep tests and the corresponding implementation in the same task group.
     - Name the target file or package and exact validation command for every task; avoid non-decidable descriptions such as "complete development".
-    - Closeout tasks must include formatting, `make test-race` for all six Go modules, six-module `go vet` through `make dev-check` or `scripts/agents/gates.sh`, and strict OpenSpec validation; add platform-specific or performance gates when applicable.
+    - Closeout tasks must include formatting, `make test-race` for all five Go modules, five-module `go vet` through `make dev-check` or `scripts/agents/gates.sh`, and strict OpenSpec validation; add platform-specific or performance gates when applicable.
 
 operations:
   apply:
@@ -50,4 +50,4 @@ operations:
     guidance:
       - Before archive, confirm task status and implementation match the delta specifications, then run `openspec validate --all --strict --no-interactive`.
       - Merge reusable behavioral contracts into canonical specifications; update `AGENTS.md` or `openspec/config.yaml` for project-wide working practices.
-      - When necessary, update the root `AGENTS.md` version matrix and the corresponding canonical specification or `docs/notes/progress.md`; `TestBaselineVersionsMatchCode` in `packages/audit` enforces the version values. Keep `CLAUDE.md` as a thin shim only.
+      - When necessary, update the root `AGENTS.md` version matrix and the corresponding canonical specification or `docs/notes/progress.md`; baseline version tests in Python package `packages/audit` enforce the version values. Keep `CLAUDE.md` as a thin shim only.

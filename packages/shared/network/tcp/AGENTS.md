@@ -32,4 +32,4 @@ stream 与 listener 的 `Close` 均须幂等。EOF、unexpected EOF、closed pip
 
 - 修改本子包：`go test ./packages/shared/network/tcp -race -count=1`
 - 修改父包共享 packet、codec、frame、login 或 stream 契约：`go test ./packages/shared/network/... -race -count=1`
-- 修改依赖方向：`go test ./packages/audit -count=1`
+- 修改依赖方向：`make archcheck`

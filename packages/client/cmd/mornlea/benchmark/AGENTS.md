@@ -9,7 +9,7 @@ capture（方向由 `TestClientCommandSubpackageDependencyDirections` 强制）�
 
 - 场景身份是 `scenarioVersion`（当前 v22）：场景语义、GPU 完成时间定义与报告
   结构都绑定版本，迁移链以它为终点。根 `AGENTS.md` 的「benchmark scenario
-  vN」基线断言由 `packages/audit` 的 `TestBaselineVersionsMatchCode` 直接
+  vN」基线断言由 `packages/audit` 的基线版本测试直接
   读取本包常量核对——升版时必须同步根文档。v22 记录的是自然短草对被测进程
   与被测世界的改变（稳定方块与 mesh registry 追加 `ShortGrassID`、worldgen
   `MGW1` layout 3、固定世界出现确定性短草），叠加在 v21（常显 HUD 层迁出

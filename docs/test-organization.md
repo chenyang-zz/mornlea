@@ -70,7 +70,7 @@ The prefix describes a proven property while a suffix describes a test kind. Do 
 - [ ] Production files, `testdata/`, and goldens are unchanged; `git diff --stat` contains only `*_test.go`.
 - [ ] No comment information is lost; every sentence from the split file's header appears in a new file.
 - [ ] `gofmt -l <pkg>` prints nothing, `go vet ./<pkg>` passes, and `go test ./<pkg> -race -count=1` passes.
-- [ ] After changing Go files, `go test ./packages/audit -count=1` passes.
+- [ ] After changing Go files, `make archcheck` passes.
 
 ## Examples
 

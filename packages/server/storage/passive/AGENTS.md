@@ -58,4 +58,4 @@
 - 定点测试：`go test ./packages/server/storage/passive -race -count=1`（纯
   codec 域，秒级，不编译执行其他域的测试）。
 - 根包编排：`go test ./packages/server/storage -run 'PassiveStore|DiskPassive' -race -count=1`。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

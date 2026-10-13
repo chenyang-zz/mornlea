@@ -61,4 +61,4 @@
   域，秒级，不编译执行其他域的测试）。
 - 根包编排（原子替换、损坏/未来文件拒写、revision 复用）：
   `go test ./packages/server/storage -run 'PlayerStore|DiskPlayer' -race -count=1`。
-- 依赖方向与文档守卫：`go test ./packages/audit -count=1`。
+- 依赖方向与文档守卫：`make archcheck`。

@@ -63,7 +63,7 @@ Go 与 Python 各自限制全局 4 个 Planner/Dialogue run、同一伙伴 1 个
 - `packages/client` 是客户端域 Go 模块（独立 go.mod，go.work 成员）：`client` 持有客户端镜像、输入预测、消息接收、client ABI bridge 和渲染侧 CPU 编排；`render`（+hud）、`mesh`、`assets`、`lod`、`audio` 与 `packages/shared/worldgen`、`packages/server/fluid` 同属领域数据描述、CPU 编码和 Rust 调用编排，不拥有 GPU 后端或第二套数值生产实现；`packages/client/cmd/mornlea` 是图形客户端应用入口（app/benchmark 在进程内装配本地权威 Host，是该模块中唯一允许 import `packages/server` 的位置）。
 - server 与 client 两模块间的两条豁免边由 `packages/audit` 源码守卫强制：server 生产文件禁 import client（Memory/TCP 集成测试的客户端镜像只出现在 `_test.go`），client 域库文件禁 import server（服务端装配只属于 `packages/client/cmd/mornlea`）。
 
-内部包允许的直接依赖以 `packages/audit/dependency_test.go` 的 `allowed` 表为准。`packages/audit` 同时以 `TestSimAuthorityStateOwnershipStaysExplicit` 扫描 runtime 的包变量与全部 holder，把唯一 mutation/commit 绑定到 `StepWithTunables` 的真实调用路径，以 `TestAuthorityTickTunablesStayExplicit` 守住权威 tick 参数捕获和传递；其余门禁守住无 WebGPU Go 依赖、无图形专服闭包、伙伴 Agent 服务发布边界、Make/CI 门禁和长期版本基线；架构文档不复制会随包演进的依赖白名单。
+内部包允许的直接依赖以 `packages/audit/audit/dependencies.py` 的 `allowed` 表为准。`packages/audit` 同时以 `TestSimAuthorityStateOwnershipStaysExplicit` 扫描 runtime 的包变量与全部 holder，把唯一 mutation/commit 绑定到 `StepWithTunables` 的真实调用路径，以 `TestAuthorityTickTunablesStayExplicit` 守住权威 tick 参数捕获和传递；其余门禁守住无 WebGPU Go 依赖、无图形专服闭包、伙伴 Agent 服务发布边界、Make/CI 门禁和长期版本基线；架构文档不复制会随包演进的依赖白名单。
 
 ## 6. `mornlea_engine` / engine ABI v11
 
@@ -148,7 +148,7 @@ Linux 专服发布单元由 `mornlea-server` 与相邻的 `libmornlea_engine.so`
 │   │   ├── agent-board/    AI 工作者执行状态看板（web/ 为 React 前端）
 │   │   ├── gfxspike/       Rust renderer 地形渲染验证程序
 │   │   └── composite_grass_side/    草方块侧面材质合成工具
-│   ├── audit/              审计单元（go.work workspace 成员）：架构门禁测试集（包名 archcheck；依赖方向、单元边界、身份与基线版本）
+│   ├── audit/              独立 Python 审计单元：架构与治理门禁测试集（依赖方向、单元边界、身份与基线版本）
 │   └── engine/
 │       └── crates/
 │           ├── mornlea_engine/  固定 Rust 1.97.1 cdylib：mesh/light/collision/raycast/physics/worldgen/lod/fluid

@@ -18,8 +18,8 @@ go.work 成员）。更具体的边界见各子目录 `AGENTS.md`：
 
 ## 依赖边界
 
-- 模块生产代码只 require 兄弟单元 `packages/shared` 与 `packages/contracts`（`packages/audit/unit_boundary_test.go` 强制）；包级依赖方向以 `packages/audit/dependency_test.go` 的 `allowed` 表为唯一真相，不要在指南中复制该表。新增包或依赖边必须先证明方向合理并同步架构门禁。
-- go.mod 对 `packages/client` 的 require 是测试专用豁免边：server 的 Memory/TCP 集成测试以客户端镜像驱动会话（Go 的 require 无法按测试限定，模块层只能放行）；生产代码不得 import `packages/client` 的任何包，该禁令由 `packages/audit/server_client_boundary_test.go` 源码守卫强制，server 的兄弟 require 集恰为 {shared, contracts, client} 亦被精确断言钉住。
+- 模块生产代码只 require 兄弟单元 `packages/shared` 与 `packages/contracts`（`packages/audit/audit/boundaries.py` 强制）；包级依赖方向以 `packages/audit/audit/dependencies.py` 的 `allowed` 表为唯一真相，不要在指南中复制该表。新增包或依赖边必须先证明方向合理并同步架构门禁。
+- go.mod 对 `packages/client` 的 require 是测试专用豁免边：server 的 Memory/TCP 集成测试以客户端镜像驱动会话（Go 的 require 无法按测试限定，模块层只能放行）；生产代码不得 import `packages/client` 的任何包，该禁令由 `packages/audit/audit/boundaries.py` 源码守卫强制，server 的兄弟 require 集恰为 {shared, contracts, client} 亦被精确断言钉住。
 - engine C ABI 只能由 `packages/shared/nativeabi` 接触；领域包经既有 bridge 调用 Rust，不得直接引入 C ABI 或另建生产 fallback。
 
 ## 测试组织
@@ -30,5 +30,5 @@ go.work 成员）。更具体的边界见各子目录 `AGENTS.md`：
 
 - 模拟子树示例：`go test ./packages/server/sim/... -race -count=1`；处理其他包时把路径替换为对应真实目录。
 - 服务端装配：`go test ./packages/server/server -race -count=1`；存储子树：`go test ./packages/server/storage/... -race -count=1`。
-- 依赖边界：`go test ./packages/audit -count=1`。
+- 依赖边界：`make archcheck`。
 - 当前文档入口：`docs/notes/go-rust-division.md`、`docs/test-organization.md`。

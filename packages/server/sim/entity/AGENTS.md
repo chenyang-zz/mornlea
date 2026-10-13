@@ -35,4 +35,4 @@
 
 - `go test ./packages/server/sim/entity -race -count=1`
 - 关联：`go test ./packages/shared/companion ./packages/shared/physics -race -count=1`
-- 依赖边界：`go test ./packages/audit -count=1`
+- 依赖边界：`make archcheck`

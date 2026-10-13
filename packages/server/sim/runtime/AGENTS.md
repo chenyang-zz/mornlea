@@ -49,4 +49,4 @@
 
 - `go test ./packages/server/sim/runtime -race -count=1`
 - 子树全量：`go test ./packages/server/sim/... -race -count=1`
-- 依赖边界：`go test ./packages/audit -count=1`
+- 依赖边界：`make archcheck`

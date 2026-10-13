@@ -584,111 +584,74 @@ API。
 - **WHEN** 调用 `mornlea-companion-agent serve --config` 与 `MORNLEA_COMPANION_AGENT_PYTHON`
 - **THEN** 服务 MUST 正常启动并输出弃用提示，其 HTTP/MCP 可观察行为 MUST 与 `mornlea-agent` 逐字节一致
 
-### Requirement: 仓库按独立单元收纳于 packages
+### Requirement: Units are organized independently under packages
 
-仓库 MUST 把全部独立功能单元收纳在 `packages/` 之下：Go 单元
-`packages/shared`、`packages/server`、`packages/client`、`packages/tools`、
-`packages/audit`、`packages/contracts`，Rust workspace `packages/engine`，
-以及 Agent 服务族 `packages/agent`（uv workspace：成员 `harness/`、`extension-api/`，未发布的 `app/gateway`，`tests/`；companion 为首个入驻服务）。顶层 MUST 只保留全局内容：`go.work`、`Makefile`、`.github/`、
-`docs/`、`openspec/`、`scripts/`、`testdata/`、根级 Agent 服务配置模板 `config.example.yaml`（本地 `config.yaml` gitignored）与根级说明、许可和 ignore
-文件；顶层 MUST NOT 再出现 `internal/`、`cmd/`、`services/`、`web/`、
-`contracts/` 或 `engine/`。每个单元 MUST 可在其目录内独立构建与测试。
+The repository MUST place all independent functional units under `packages/`: five Go modules (`packages/shared`, `packages/server`, `packages/client`, `packages/tools`, `packages/contracts`), the standalone Python audit unit `packages/audit`, the Rust workspace `packages/engine`, and the Agent service family `packages/agent` (a uv workspace with members `harness/`, `extension-api/`, unreleased `app/gateway`, and `tests/`). The top level MUST retain only global repository content: `go.work`, `Makefile`, `.github/`, `docs/`, `openspec/`, `scripts/`, `testdata/`, root-level Agent configuration template `config.example.yaml` (local `config.yaml` gitignored), and root-level instructions, license, and ignore files. The top level MUST NOT contain `internal/`, `cmd/`, `services/`, `web/`, `contracts/`, or `engine/`. Each unit MUST build and test independently within its own directory.
 
-#### Scenario: 顶层仅含全局目录
+#### Scenario: Top level contains only global directories and files
 
-- **GIVEN** 单元化重组完成后的仓库根目录
-- **WHEN** 枚举顶层目录
-- **THEN** MUST 只出现全局目录与文件（`packages/`、`go.work`、`Makefile`、
-`.github/`、`docs/`、`openspec/`、`scripts/`、`testdata/`、根级`config.example.yaml`、根级 README/LICENSE/AGENTS.md/CLAUDE.md/.gitignore 等）
-- **AND** MUST NOT 出现 `internal/`、`cmd/`、`services/`、`web/`、
-  `contracts/`、`engine/` 等单元目录
+- **GIVEN** the repository root after unit reorganization
+- **WHEN** top-level directory entries are enumerated
+- **THEN** MUST appear only global directories and files (`packages/`, `go.work`, `Makefile`, `.github/`, `docs/`, `openspec/`, `scripts/`, `testdata/`, root `config.example.yaml`, root README/LICENSE/AGENTS.md/CLAUDE.md/.gitignore, etc.)
+- **AND** MUST NOT appear `internal/`, `cmd/`, `services/`, `web/`, `contracts/`, or `engine/`
 
-#### Scenario: 单元可独立构建与测试
+#### Scenario: Units build and test independently
 
-- **GIVEN** 工作区已按 `go.work` 解析本地模块、Rust cdylib 与 Python venv
-  就绪
-- **WHEN** 分别在 `packages/server`、`packages/client`、`packages/tools`
-运行 `go build ./...` 与 `go test ./...`，在 `packages/engine` 运行
-`cargo build`/`cargo test`，在 `packages/agent` 运行
-`uv run pytest`
-- **THEN** 每个单元 MUST 在自身目录内完成构建与测试，MUST NOT 要求先进入
-  其他单元目录执行手工步骤
+- **GIVEN** the workspace with local modules resolved via `go.work`, Rust cdylib built, and Python venv ready
+- **WHEN** running `go build ./...` and `go test ./...` in `packages/server`, `packages/client`, and `packages/tools`, `cargo build` and `cargo test` in `packages/engine`, `uv run pytest` in `packages/agent`, and `uv run pytest packages/audit` in `packages/audit`
+- **THEN** each unit MUST complete its build and tests within its own directory without requiring prior manual steps in other unit directories
 
-#### Scenario: Agent 服务族可扩展
+#### Scenario: Agent service family is extensible
 
-- **GIVEN** companion 已作为首个服务入驻 `packages/agent` workspace 共享骨架（本次经批准的一次性迁移除外）
-- **WHEN** 新增另一个独立 Agent 服务
-- **THEN** 它 MUST 以 `packages/agent/<名称>` 并列入驻或复用 workspace 共享 harness，MUST NOT 破坏 companion 或其他单元的可观察行为
+- **GIVEN** companion has been onboarded into `packages/agent` workspace
+- **WHEN** adding another independent Agent service
+- **THEN** it MUST onboard side-by-side at `packages/agent/<name>` or reuse the workspace shared harness, and MUST NOT break observable behavior of companion or other units
 
-### Requirement: Go 单元模块边界双层强制
+### Requirement: Two-tier enforcement of Go module boundaries
 
-仓库 MUST 以根 `go.work` 直辖六个 Go 模块（shared、server、client、tools、
-audit、contracts），根目录 MUST NOT 保留 `go.mod`。跨单元引用 MUST 经
-go.mod require 声明，且仅允许以下方向：`server → {shared, contracts}`（生产
-代码）、`client → {shared, server}`、`tools → {shared, server, client,
-contracts}`、`audit` 与 `contracts` MUST NOT require 任何兄弟单元。两条经
-裁决的豁免边：`server` MAY 仅因测试文件（客户端镜像驱动的 Memory/TCP 集成
-测试）require `client`，其生产代码 MUST NOT import `packages/client` 的任何
-包，该禁令由架构检查以源码级守卫强制；`client` 对 `server` 的 require 仅由
-`packages/client/cmd/mornlea` 应用入口消费（普通本地与 benchmark 模式在进程
-内装配本地权威 Host，与 tools 组合两侧的入口同构），client 域库包
-（client/render/mesh/lod/audio/assets）的任何文件 MUST NOT import
-`packages/server` 的包，该禁令同样由源码级守卫强制。
-`packages/audit` 的架构检查 MUST 枚举各单元真实 import 边并强制同一方向
-契约：`client` 的域库包 MUST NOT 依赖 `server` 或 `tools`（
-`packages/client/cmd/mornlea` 应用入口除外），`server` 的生产包 MUST NOT
-依赖 `client`、`tools`，`shared` MUST NOT 依赖 server、client、tools 的任何
-包。
+The repository MUST coordinate five Go modules (`packages/shared`, `packages/server`, `packages/client`, `packages/tools`, `packages/contracts`) directly under root `go.work`, and the root directory MUST NOT retain a `go.mod`. Cross-unit references MUST be declared via `go.mod` require directives, and only the following directions SHALL be permitted: `server -> {shared, contracts}` (production code), `client -> {shared, server}`, `tools -> {shared, server, client, contracts}`; `contracts` MUST NOT require any sibling unit. Architectural and governance gates are enforced by the standalone Python unit `packages/audit`. Two ruled exceptions exist: `server` MAY require `client` solely for test files (mirror-driven integration tests), while production code MUST NOT import `packages/client`, enforced by source guards in `packages/audit/audit/boundaries.py`; `client` requires `server` solely for `packages/client/cmd/mornlea` application entry points (in-process local authoritative Host assembly), while client domain library packages (client/render/mesh/lod/audio/assets) MUST NOT import `packages/server`, enforced by source guards.
+`packages/audit` architectural gates MUST enumerate actual import edges and enforce the same direction contract: client domain libraries MUST NOT depend on server or tools (except `packages/client/cmd/mornlea`), server production packages MUST NOT depend on client or tools, and shared MUST NOT depend on server, client, or tools.
 
-#### Scenario: 编译器拒绝未声明的跨单元导入
+#### Scenario: Compiler rejects undeclared cross-unit imports
 
-- **GIVEN** `packages/shared` 的某包源码导入 `packages/server` 的包
-- **WHEN** 在 workspace 下构建 `packages/shared`
-- **THEN** 构建 MUST 因未声明 require 而失败
-- **AND** 即使补上 go.mod require，`packages/audit` 的单元边界检查 MUST
-  因 `shared → server` 违反方向契约而失败
+- **GIVEN** source in `packages/shared` imports a package from `packages/server`
+- **WHEN** building `packages/shared` under the workspace
+- **THEN** the build MUST fail due to undeclared require
+- **AND** even if `go.mod` require is added, module boundary checks in `packages/audit` MUST fail because `shared -> server` violates direction contracts
 
-#### Scenario: server 生产代码不得导入 client
+#### Scenario: Server production code cannot import client
 
-- **GIVEN** `packages/server` 的某个非 `_test.go` 文件导入
-  `packages/client` 的包
-- **WHEN** 架构检查扫描 server 生产源码
-- **THEN** 该导入 MUST 被拒绝
-- **AND** `_test.go` 文件对 `packages/client` 的导入 MUST 被放行（客户端
-  镜像驱动的集成测试）
+- **GIVEN** a non-`_test.go` file in `packages/server` imports a `packages/client` package
+- **WHEN** architectural check scans server production source
+- **THEN** the import MUST be rejected
+- **AND** imports of `packages/client` in `_test.go` files MUST be permitted for mirror-driven integration tests
 
-#### Scenario: client 域库不得导入 server
+#### Scenario: Client domain libraries cannot import server
 
-- **GIVEN** `packages/client` 域库包（cmd/mornlea 子树之外）的某个文件导入
-  `packages/server` 的包
-- **WHEN** 架构检查扫描 client 域库源码
-- **THEN** 该导入 MUST 被拒绝（含 `_test.go`——镜像驱动方向固定为 server
-  测试消费 client 镜像）
-- **AND** `packages/client/cmd/mornlea` 应用入口（app/benchmark 装配本地
-  权威 Host）对 `packages/server` 的导入 MUST 被放行
+- **GIVEN** a file in `packages/client` domain libraries (outside `cmd/mornlea`) imports a `packages/server` package
+- **WHEN** architectural check scans client domain library source
+- **THEN** the import MUST be rejected (including `_test.go`)
+- **AND** imports of `packages/server` in `packages/client/cmd/mornlea` application entry points MUST be permitted
 
-#### Scenario: server 的兄弟 require 集被门禁化
+#### Scenario: Server sibling require set is gated
 
-- **GIVEN** `packages/server/go.mod` 的兄弟 require 集
-- **WHEN** 架构检查解析各单元 go.mod 的直接 require（间接 require 行不计入）
-- **THEN** server 的兄弟 require 集 MUST 恰为 `{shared, contracts, client}`
-- **AND** 多出的边 MUST 被单元边界检查拒绝，client 豁免边消失 MUST 被该
-  精确集断言拒绝
+- **GIVEN** the sibling require set in `packages/server/go.mod`
+- **WHEN** architectural check parses direct sibling requires
+- **THEN** server sibling requires MUST be exactly `{shared, contracts, client}`
+- **AND** extra require edges MUST be rejected, and removal of the client test edge MUST be rejected
 
-#### Scenario: 架构检查跨模块枚举真实依赖边
+#### Scenario: Architecture check enumerates real cross-module import edges
 
-- **GIVEN** `packages/audit` 的依赖白名单已按单元路径前缀登记
-- **WHEN** 架构检查枚举 `packages/` 下各模块的生产 import
-- **THEN** 实际存在的内部依赖边 MUST 全部落在允许边集合内
-- **AND** 向任何单元注入未登记依赖边 MUST 被拒绝，且该拒绝 MUST 有合成
-  drift 测试证明检查器本身有效
+- **GIVEN** allowed dependency allowlists in `packages/audit/audit/dependencies.py`
+- **WHEN** architecture check enumerates production imports across modules under `packages/`
+- **THEN** actual internal import edges MUST fall entirely within the allowed edge set
+- **AND** injecting undeclared edges MUST be rejected with synthetic drift tests proving checker validity
 
-#### Scenario: 审计单元不反向耦合被审单元
+#### Scenario: Audit unit does not couple back to audited units
 
-- **GIVEN** `packages/audit` 只通过 `go list` 与源码 AST 观察被审单元
-- **WHEN** 枚举 `packages/audit` 自身的导入
-- **THEN** 它 MUST NOT 导入 shared、server、client、tools、contracts 的
-  任何生产包
+- **GIVEN** `packages/audit` operates as a standalone Python unit observing audited units solely via `go list`, file inspection, and AST/regex scanners
+- **WHEN** dependencies and imports of `packages/audit` are enumerated
+- **THEN** it MUST NOT import any production package from shared, server, client, tools, or contracts
 
 ### Requirement: 单元迁移保持测试入口与产物集合
 

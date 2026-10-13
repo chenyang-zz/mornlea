@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "total_files": 112,
-  "total_lines": 10655,
+  "total_lines": 10574,
   "files": [
     {
       "path": "openspec/specs/authoritative-armor/spec.md",
@@ -400,8 +400,8 @@
     },
     {
       "path": "openspec/specs/repository-code-organization/spec.md",
-      "count": 530,
-      "digest": "5c2f6d6220ddf33999110cc64edf733cb67633236690f8cf50040850cf0da747"
+      "count": 449,
+      "digest": "3f29a6bcd26b6d1648a9b2df310eff77b56b86bb4ff97f67528c15643a910bbb"
     },
     {
       "path": "openspec/specs/rust-client-render-cutover/spec.md",
