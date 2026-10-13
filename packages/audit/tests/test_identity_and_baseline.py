@@ -287,6 +287,11 @@ def test_mornlea_current_identity(repo_root: Path) -> None:
             for forbidden in FORBIDDEN_CURRENT_IDENTITY:
                 assert forbidden not in rel_str, f"Path {rel_str} contains forbidden identity token: {forbidden}"
 
+            legacy_path_match = LEGACY_IDENTITY_PATTERN.search(rel_str)
+            assert (
+                legacy_path_match is None
+            ), f"Path {rel_str} contains unapproved legacy identity match: {legacy_path_match.group(0)}"
+
             try:
                 content = file_path.read_text(encoding="utf-8", errors="replace")
             except Exception:

@@ -190,8 +190,10 @@ def test_sim_authority_mutation_and_owners(repo_root: Path) -> None:
 
     assert start_idx >= 0 and end_idx >= 0 and start_idx < end_idx
     mutation_block = "\n".join(lines[start_idx : end_idx + 1])
-    assert "go " not in mutation_block, "Mutation lifecycle must not spawn goroutines"
-    assert "defer " not in mutation_block, "Mutation lifecycle must not contain defer statements"
+    mutation_clean = re.sub(r"/\*.*?\*/", "", mutation_block, flags=re.DOTALL)
+    mutation_code = "\n".join(l.split("//")[0] for l in mutation_clean.splitlines())
+    assert "go " not in mutation_code, "Mutation lifecycle must not spawn goroutines"
+    assert "defer " not in mutation_code, "Mutation lifecycle must not contain defer statements"
 
 
 def test_difficulty_domain_stays_single_core(repo_root: Path) -> None:
@@ -219,7 +221,7 @@ def test_difficulty_domain_stays_single_core(repo_root: Path) -> None:
             is_blind = any(rel_path.startswith(b) for b in blind_roots)
             for line_idx, raw_line in enumerate(clean.splitlines(), start=1):
                 code = raw_line.split("//")[0]
-                if is_blind and re.search(r"(?i)\bdifficulty\b", code):
+                if is_blind and "difficulty" in code.lower():
                     pytest.fail(
                         f"{rel_path}:{line_idx}: blind subtree mentions difficulty in code: '{code.strip()}'"
                     )
@@ -227,14 +229,11 @@ def test_difficulty_domain_stays_single_core(repo_root: Path) -> None:
                 # Canonical text check: "normal", "peaceful", "hard" as standalone string literals
                 if rel_path != core_diff_path:
                     for text_lit in canonical_difficulty_texts:
-                        # Match standalone string literal
                         if text_lit in code:
-                            # Verify if it's used as standalone difficulty literal
-                            if re.search(rf"\b{re.escape(text_lit)}\b", code):
-                                pytest.fail(
-                                    f"{rel_path}:{line_idx}: canonical difficulty text {text_lit} "
-                                    f"only allowed in {core_diff_path}"
-                                )
+                            pytest.fail(
+                                f"{rel_path}:{line_idx}: canonical difficulty text {text_lit} "
+                                f"only allowed in {core_diff_path}"
+                            )
 
 
 def test_armor_domain_stays_single_core(repo_root: Path) -> None:

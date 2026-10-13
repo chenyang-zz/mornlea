@@ -194,14 +194,16 @@ def test_tunable_defaults_are_only_read_in_tunables_file(repo_root: Path) -> Non
         for file_path in go_files:
             content = file_path.read_text(encoding="utf-8")
             text = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-            # Find declaration names in this file
-            decl_names = _extract_top_level_declarations(content)
 
             for line_idx, raw_line in enumerate(text.splitlines(), start=1):
                 code_line = raw_line.split("//")[0]
                 matches = re.findall(r"\bdefault[A-Z]\w*\b", code_line)
                 for m in matches:
-                    if m not in decl_names:
+                    # Only exempt lines defining the constant itself (e.g. `defaultXxx = ...` or `const defaultXxx = ...`)
+                    is_definition = bool(
+                        re.match(rf"^\s*(?:const\s+|var\s+)?{m}\b(?:\s+[^=]+)?\s*=[^=]", code_line)
+                    ) and (len(code_line.split("=")) < 2 or m not in code_line.split("=")[1])
+                    if not is_definition:
                         violations.append(f"{file_path.name}:{line_idx} reads compiled default {m}")
 
     assert not violations, f"Tunable default read violations found:\n" + "\n".join(violations)
@@ -235,7 +237,7 @@ def test_only_commands_import_config(repo_root: Path) -> None:
     for root, dirs, files in os.walk(repo_root / "packages"):
         dirs[:] = [d for d in dirs if d not in {".git", ".venv", ".pytest_cache", "node_modules", "target", "__pycache__"}]
         for f in files:
-            if not f.endswith(".go") or f.endswith("_test.go"):
+            if not f.endswith(".go"):
                 continue
             file_path = Path(root) / f
             rel_path = file_path.relative_to(repo_root).as_posix()
@@ -292,7 +294,9 @@ def test_core_uses_only_native_raycast(repo_root: Path) -> None:
     imports = _extract_go_imports(raycast_content)
     assert "github.com/channing771/mornlea/packages/shared/nativeabi" in imports, "core/raycast.go must import nativeabi"
 
-    assert "nativeabi.RaycastBatch" in raycast_content, "core/raycast.go must call nativeabi.RaycastBatch"
+    assert (
+        raycast_content.count("nativeabi.RaycastBatch") == 1
+    ), "core/raycast.go must call nativeabi.RaycastBatch exactly once"
 
     forbidden_dda = {"tDelta", "tMax", "entryFace"}
     violations: list[str] = []
