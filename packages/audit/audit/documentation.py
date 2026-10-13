@@ -100,8 +100,10 @@ def is_english_canonical_markdown(path: str) -> bool:
     return path.endswith(".md") and not path.endswith(".zh.md") and not path.endswith(".en.md")
 
 
-def read_documentation_manifest(repo_root: Path) -> dict[str, Any]:
+def read_documentation_manifest(repo_root: Path | None = None) -> dict[str, Any]:
     """Read and decode documentation manifest from repository root."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     path = repo_root / DOCUMENTATION_MANIFEST_PATH
     if not path.is_file():
         fallback = repo_root / "docs" / "manifest.json"
@@ -111,8 +113,10 @@ def read_documentation_manifest(repo_root: Path) -> dict[str, Any]:
     return json.loads(data)
 
 
-def current_governed_markdown(repo_root: Path) -> list[str]:
+def current_governed_markdown(repo_root: Path | None = None) -> list[str]:
     """Enumerate all markdown files governed by the documentation manifest."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     current: list[str] = []
     # Root level markdown files
     for entry in repo_root.iterdir():
@@ -205,8 +209,10 @@ def validate_documentation_manifest_shape(manifest: dict[str, Any], current: lis
     return problems
 
 
-def verify_doc_manifest(repo_root: Path) -> list[str]:
+def verify_doc_manifest(repo_root: Path | None = None) -> list[str]:
     """Read documentation manifest, validate its structure, and verify that all classified files exist on disk."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     manifest = read_documentation_manifest(repo_root)
     current = current_governed_markdown(repo_root)
     problems = validate_documentation_manifest_shape(manifest, current)
@@ -221,8 +227,10 @@ def verify_doc_manifest(repo_root: Path) -> list[str]:
     return problems
 
 
-def changed_repository_paths(repo_root: Path) -> set[str]:
+def changed_repository_paths(repo_root: Path | None = None) -> set[str]:
     """Enumerate modified and untracked repository paths relative to root."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     changed: set[str] = set()
     for args in [["diff", "--name-only", "HEAD", "--"], ["ls-files", "--others", "--exclude-standard"]]:
         proc = run_cmd(["git", *args], cwd=repo_root)
@@ -326,8 +334,10 @@ def validate_documentation_pair(repo_root: Path, entry: dict[str, Any]) -> list[
     return problems
 
 
-def verify_doc_pairs(repo_root: Path) -> list[str]:
+def verify_doc_pairs(repo_root: Path | None = None) -> list[str]:
     """Verify that all completed bilingual documentation pairs in manifest are synchronized."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     manifest = read_documentation_manifest(repo_root)
     problems: list[str] = []
     for entry in manifest.get("documents", []):
@@ -341,8 +351,10 @@ def verify_doc_pairs(repo_root: Path) -> list[str]:
     return problems
 
 
-def active_openspec_markdown(repo_root: Path) -> list[str]:
+def active_openspec_markdown(repo_root: Path | None = None) -> list[str]:
     """Enumerate active OpenSpec markdown files, skipping only the frozen top-level archive directory."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     changes_root = repo_root / "openspec" / "changes"
     archive_root = changes_root / "archive"
     paths: list[str] = []
@@ -359,8 +371,10 @@ def active_openspec_markdown(repo_root: Path) -> list[str]:
     return paths
 
 
-def current_completed_documentation_pairs(repo_root: Path) -> list[str]:
+def current_completed_documentation_pairs(repo_root: Path | None = None) -> list[str]:
     """Return paths belonging to completed bilingual documentation pairs."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     manifest = read_documentation_manifest(repo_root)
     paths: list[str] = []
     for entry in manifest.get("documents", []):
@@ -375,8 +389,10 @@ def current_completed_documentation_pairs(repo_root: Path) -> list[str]:
     return paths
 
 
-def documentation_link_scope(repo_root: Path) -> list[str]:
+def documentation_link_scope(repo_root: Path | None = None) -> list[str]:
     """Enumerate Markdown files whose local links must resolve."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     paths = [*current_completed_documentation_pairs(repo_root), *active_openspec_markdown(repo_root)]
     return sorted(set(paths))
 
@@ -405,8 +421,10 @@ def documentation_link_problems(repo_root: Path, relative: str, text: str) -> li
     return problems
 
 
-def verify_markdown_links(repo_root: Path) -> list[str]:
+def verify_markdown_links(repo_root: Path | None = None) -> list[str]:
     """Verify that all relative markdown links in scope resolve to valid repository paths."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     scope = documentation_link_scope(repo_root)
     problems: list[str] = []
     for rel in scope:
@@ -602,8 +620,10 @@ def validate_documentation_semantic_pair(
     return problems
 
 
-def current_normative_documentation(repo_root: Path) -> list[str]:
+def current_normative_documentation(repo_root: Path | None = None) -> list[str]:
     """Enumerate machine-readable and completed bilingual normative documents."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     manifest = read_documentation_manifest(repo_root)
     paths: list[str] = []
     for entry in manifest.get("documents", []):
@@ -693,8 +713,10 @@ def non_english_markdown_prose_lines(text: str) -> list[str]:
     return findings
 
 
-def current_openspec_language_debt(repo_root: Path) -> dict[str, Any]:
+def current_openspec_language_debt(repo_root: Path | None = None) -> dict[str, Any]:
     """Calculate current non-English line counts and content digests across OpenSpec specifications."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     spec_root = repo_root / "openspec" / "specs"
     paths: list[str] = []
     if spec_root.is_dir():
@@ -772,8 +794,10 @@ def compare_planning_language_debt(
     return problems
 
 
-def verify_openspec_language(repo_root: Path) -> list[str]:
+def verify_openspec_language(repo_root: Path | None = None) -> list[str]:
     """Verify that active OpenSpec changes contain only English prose and debt inventory is not exceeded."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     problems: list[str] = []
     for rel in active_openspec_markdown(repo_root):
         text = (repo_root / rel).read_text(encoding="utf-8")
@@ -983,8 +1007,10 @@ def architecture_realtime_growth_violations(
     return violations
 
 
-def architecture_gdscript_violations(repo_root: Path, profile: str) -> list[str]:
+def architecture_gdscript_violations(repo_root: Path | None = None, profile: str = "target") -> list[str]:
     """Scan Godot project scripts for GDScript files outside approved Bootstrap allowlist."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     allow = set(PILOT_BOOTSTRAP_GDSCRIPT)
     violations: list[str] = []
     project_root = repo_root / GODOT_PROJECT_ROOT
@@ -1018,8 +1044,10 @@ def architecture_engine_access_from_texts(cargo: str, sources: list[str]) -> lis
     return violations
 
 
-def architecture_godot_engine_access_violations(repo_root: Path) -> list[str]:
+def architecture_godot_engine_access_violations(repo_root: Path | None = None) -> list[str]:
     """Verify mornlea_godot crate does not call numerical engine directly."""
+    if repo_root is None:
+        repo_root = get_repo_root()
     cargo_path = repo_root / GODOT_RUST_CRATE_ROOT / "Cargo.toml"
     cargo = cargo_path.read_text(encoding="utf-8") if cargo_path.is_file() else ""
     sources: list[str] = []

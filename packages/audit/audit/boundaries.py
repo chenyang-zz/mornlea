@@ -296,3 +296,93 @@ def verify_server_client_separation(
                     )
 
     return server_client_import_violations(collected_sources)
+
+
+GODOT_PROTOCOL_SCRIPT_DIRS = ["app", "features", "platform", "shared", "addons/mornlea_bridge"]
+GODOT_HOST_SCRIPT_DIRS = ["app/host", "app/bootstrap"]
+GODOT_WIRE_MAGICS = ["MCI1", "MCC1", "MCN1", "MCS1", "MCW1", "MCF1", "MCM1"]
+GODOT_WIRE_MAGIC_WORDS = [0x3149434D, 0x3143434D, 0x314E434D, 0x3153434D, 0x3157434D, 0x3146434D, 0x314D434D]
+GODOT_WIRE_WORD_REGEX = re.compile(r"(?i)\b0x[0-9a-f]{8}\b")
+GODOT_WIRE_BYTE_PREFIX_REGEX = re.compile(r"0x4[dD]\s*,\s*0x4[3cCdD]\b")
+GODOT_WIRE_CODEC_REGEX = re.compile(r"\bstruct\s*\.\s*(?:pack|unpack|Struct)\b|\bfrom\s+struct\s+import\b")
+GODOT_CODEC_IMPORT_REGEX = re.compile(r"(?m)^\s*(?:from|import)\s+([A-Za-z0-9_.]+)")
+GODOT_FORBIDDEN_IMPORT_ROOTS = ["packages.shared.network", "packages.client", "packages.server"]
+GODOT_GAMEPLAY_BRIDGE_CALL_REGEX = re.compile(
+    r'"(session_create|session_connect|session_poll|session_submit|session_step|'
+    r'session_close|session_status_typed|pull_world|pull_frame|pull_status|pull_identity|'
+    r'terrain_attach|terrain_ingest_world|terrain_frame|terrain_sections_json)"'
+)
+GODOT_FEATURE_REFERENCE_REGEX = re.compile(
+    r'res://(?:features|platform)/|'
+    r'"(?:session|player_view|world|actors|ui|platform\.desktop\.(?:lifecycle|input|audio))"'
+)
+
+
+class GodotDisciplineFinding:
+    def __init__(self, path: str, rule: str, detail: str):
+        self.path = path
+        self.rule = rule
+        self.detail = detail
+
+    def __repr__(self) -> str:
+        return f"{self.path}: {self.rule}: {self.detail}"
+
+
+def scan_godot_script_discipline(project_root: Path | str) -> list[GodotDisciplineFinding]:
+    """Scan Godot project scripts for protocol and host discipline violations."""
+    root = Path(project_root)
+    findings: list[GodotDisciplineFinding] = []
+    host_dirs = set(GODOT_HOST_SCRIPT_DIRS)
+
+    scanned_dirs = set(GODOT_PROTOCOL_SCRIPT_DIRS) | host_dirs
+    for rel_dir in scanned_dirs:
+        dir_path = root / rel_dir
+        if not dir_path.is_dir():
+            continue
+        is_host = rel_dir in host_dirs
+        for cur, _, files in os.walk(dir_path):
+            cur_p = Path(cur)
+            if cur_p.name in ("__pycache__", "bin"):
+                continue
+            for file in files:
+                if not (file.endswith(".py") or file.endswith(".pyi") or file.endswith(".gd")):
+                    continue
+                file_p = cur_p / file
+                source = file_p.read_text(encoding="utf-8", errors="replace")
+                rel_file = file_p.relative_to(root).as_posix()
+
+                # Protocol findings
+                for magic in GODOT_WIRE_MAGICS:
+                    if magic in source:
+                        findings.append(GodotDisciplineFinding(rel_file, "protocol-magic-text", magic))
+                for word in GODOT_WIRE_WORD_REGEX.findall(source):
+                    try:
+                        val = int(word, 16)
+                        if val in GODOT_WIRE_MAGIC_WORDS:
+                            findings.append(GodotDisciplineFinding(rel_file, "protocol-magic-word", word))
+                    except ValueError:
+                        pass
+                for match in GODOT_WIRE_BYTE_PREFIX_REGEX.findall(source):
+                    findings.append(GodotDisciplineFinding(rel_file, "protocol-wire-byte-prefix", match))
+                loc = GODOT_WIRE_CODEC_REGEX.search(source)
+                if loc:
+                    findings.append(GodotDisciplineFinding(rel_file, "protocol-wire-record-codec", loc.group(0)))
+                for match in GODOT_CODEC_IMPORT_REGEX.findall(source):
+                    mod = match
+                    for r in GODOT_FORBIDDEN_IMPORT_ROOTS:
+                        if mod == r or mod.startswith(r + "."):
+                            findings.append(GodotDisciplineFinding(rel_file, "protocol-codec-import", mod))
+                    for seg in mod.split("."):
+                        if "codec" in seg:
+                            findings.append(GodotDisciplineFinding(rel_file, "protocol-codec-import", mod))
+
+                # Host findings
+                if is_host:
+                    g_match = GODOT_GAMEPLAY_BRIDGE_CALL_REGEX.search(source)
+                    if g_match:
+                        findings.append(GodotDisciplineFinding(rel_file, "host-gameplay-bridge-call", g_match.group(0)))
+                    f_match = GODOT_FEATURE_REFERENCE_REGEX.search(source)
+                    if f_match:
+                        findings.append(GodotDisciplineFinding(rel_file, "host-feature-reference", f_match.group(0)))
+
+    return findings

@@ -53,8 +53,16 @@ from audit.documentation import (
     architecture_engine_access_from_texts,
     architecture_go_host_boundary_from_imports,
 )
+from audit.boundaries import scan_godot_script_discipline
 from audit.dependencies import get_package_imports
-from tests.test_godot import scan_godot_script_discipline
+
+
+def test_documentation_verification_default_signatures() -> None:
+    """Verify that documentation verification functions support 0-arity default signatures."""
+    assert verify_doc_manifest() == []
+    assert verify_doc_pairs() == []
+    assert verify_markdown_links() == []
+    assert verify_openspec_language() == []
 
 
 def test_documentation_manifest_classifies_current_markdown(repo_root: Path) -> None:
