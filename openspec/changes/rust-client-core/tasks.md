@@ -82,3 +82,10 @@ These nodes close the authorized code-repair scope. They do not close the pendin
 - [x] 5.7 Bound audio provenance history and derive snow cues from actual prediction source facts.
 - [x] 5.8 Compose the real endpoint, confirmed block ownership, input/keepalive output, prediction and all ten families.
 - [x] 5.9 Run repaired provider/integration regressions, independent review and aggregate code gates; reconcile remaining qualification status.
+
+## 6. Completion-review repairs
+
+[18-completion-review-repairs.md](plans/18-completion-review-repairs.md) resolves the original-contract defects found during the user-authorized final global review.
+
+- [ ] 6.1 Bound retained live mirrors and suppress stale authoritative source facts before projection.
+- [ ] 6.2 Report stable Rust publication failures through bounded host status.
