@@ -284,4 +284,4 @@
   3. `codex/b36-axes-shovels` 未认领在途分支与脏 worktree 连续十四轮零收敛；串行队首 B-36 因此持续无法晋升，B-37 及其后全部排队行被动等待。收编/认领/作废需控制会话裁决；本轮仅整理备注，未触碰该分支与 worktree。
   4. 本轮为 2026-10-13 起的持续静默期第四日：`origin/dev`、`origin/main` 与全部远端分支零提交、零新归档、零新评论。若静默属预期（控制会话转其它工作线），后续轮次建议维持「无变化轮次」节流。
   5. 无 backlog 行但已交付的控制会话 change（first-person hands、remove-mining-hud-bar、python audit 迁移、rust-client-core 资格化等）是否追溯补履历行，待用户裁决（维持不补先例）。
-  6. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、`archive/2026-08-28-placeable-torches/proposal.md` 延期与放弃章节占位符、F-04（`docs/F-04-lan-server-facts` 分支在本机与全部远端均不存在，无 worktree 可核对）、16 个 prunable worktree 注册（较上轮 8 个增加，均为 `/private/tmp/mornlea-f3-*` 等旧评审 worktree 的残留注册，`git worktree prune` 属用户裁决）。
+  6. 遗留未动项：重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、`archive/2026-08-28-placeable-torches/proposal.md` 延期与放弃章节占位符、F-04（`docs/F-04-lan-server-facts` 分支在本机与全部远端均不存在，无 worktree 可核对）、54 个注册 worktree（16 个 prunable，均为 `/private/tmp/mornlea-f3-*` 等旧评审 worktree 的残留注册）；`.git/worktrees` 各管理目录 mtime 无一晚于 2026-10-13，本轮零新增注册。上轮记录的「25 个注册 / 8 个 prunable」与本轮实测不符，判断为上轮计数口径差异或漏计，以本轮 `git worktree list` 实测 54/16 为准；`git worktree prune` 属用户裁决。
