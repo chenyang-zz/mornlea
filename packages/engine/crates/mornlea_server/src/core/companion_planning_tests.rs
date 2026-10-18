@@ -730,4 +730,25 @@ fn current_world_closed_or_failed_authority_is_outer_error_unchanged() {
             WorldChanged::CompanionUnavailable | WorldChanged::TerrainUnavailable
         ))
     ));
+
+    // A closed authority: mark_closed flips the phase the settled read
+    // checks, so the result must be the outer InvalidState error with the
+    // exact Closed payload, never an inner world change. Matching the
+    // outer Err here is the discrimination itself: an inner refusal would
+    // arrive as Ok(Err(_)) and fail this assertion.
+    let mut closed = planning_fixture(FIXTURES[0].1);
+    let companion = closed.companion;
+    closed.authority.mark_closed();
+    let result = closed.authority.companion_current_world(companion);
+    assert_eq!(
+        result,
+        Err(ServerError::InvalidState {
+            phase: ServerPhase::Closed
+        }),
+        "closed authority must propagate as the outer error, unchanged"
+    );
+    assert!(
+        !matches!(result, Ok(Err(_))),
+        "closed authority must not be classified as a world change"
+    );
 }
