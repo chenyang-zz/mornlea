@@ -43,6 +43,10 @@ use super::companion_chat::{
     Addressed, CompanionChatBook, CompanionChatIssuer, CompanionChatQueueView, CompanionChatTask,
     DecidedChatFact, MAX_DECIDED_FACTS, MAX_EXTERNAL_LIFECYCLE, STOP_COMMAND, parse_chat_address,
 };
+use super::companion_runner::{
+    CompanionPathOutcome, CompanionPathRequest, CompanionRunnerOutput, FollowObservation,
+    RunnerEffect, RunnerTick, TaskRunner,
+};
 use super::container_store::ContainerState;
 use super::contracts::*;
 use super::deferred_commands::DeferredCommands;
@@ -296,6 +300,10 @@ pub struct AuthorityState {
     /// the single serial owner for configured names, task FIFOs, captured
     /// issuers, generations, phases, and decided chat facts.
     companion_chat: CompanionChatBook,
+    /// Per-task runner state for running companion tasks, created at
+    /// install or restored lazily from the stored task. Entries leave
+    /// with their task's terminal finish.
+    companion_runners: BTreeMap<CompanionId, TaskRunner>,
     /// Plain trusted-observer enable flag (config wiring is gap 3).
     trusted_observer_enabled: bool,
     /// Attached trusted observers; capped at `MAX_TRUSTED_OBSERVERS`.
@@ -381,6 +389,7 @@ impl AuthorityState {
             chat_queue: VecDeque::new(),
             next_chat_event_id: 1,
             companion_chat: CompanionChatBook::new(),
+            companion_runners: BTreeMap::new(),
             trusted_observer_enabled: false,
             trusted_observers: BTreeMap::new(),
             trusted_observer_generation: 0,
@@ -1480,6 +1489,12 @@ impl AuthorityState {
     /// progress, running task state, and already queued action envelopes are
     /// cleared; the pending chat FIFO and every other companion are kept.
     fn clear_stopped_companion_runtime(&mut self, id: CompanionId) {
+        // Runner state belongs to the cleared task: every path that
+        // clears or replaces a companion's current task (stop here, the
+        // terminal finish through the same helper) drops it, so a later
+        // task never inherits a stale generation, step index, deadline,
+        // or outstanding path request.
+        self.companion_runners.remove(&id);
         let key = ActorKey::Companion(id);
         if let Some(runtime) = self.residents.runtimes.get_mut(&key) {
             runtime.controls = None;
@@ -1684,6 +1699,31 @@ impl AuthorityState {
         generation: u64,
         plan: AgentPlan,
     ) -> Result<bool, ServerError> {
+        self.install_companion_chat_plan_inner(id, generation, plan, None)
+    }
+
+    /// Installs a validated plan and stamps the task deadline at Running
+    /// entry from the bare frozen timeout minutes: the entry world time
+    /// plus the minutes converted at 1200 ticks per minute, with a
+    /// follow-tail plan keeping the zero exemption. This is the seam the
+    /// runtime assembly drives; the runner state starts here.
+    pub fn install_companion_chat_plan_with_timeout(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        plan: AgentPlan,
+        timeout_minutes: u32,
+    ) -> Result<bool, ServerError> {
+        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout_minutes))
+    }
+
+    fn install_companion_chat_plan_inner(
+        &mut self,
+        id: CompanionId,
+        generation: u64,
+        plan: AgentPlan,
+        timeout_minutes: Option<u32>,
+    ) -> Result<bool, ServerError> {
         if self.phase != ServerPhase::Running {
             return Err(ServerError::InvalidState { phase: self.phase });
         }
@@ -1722,7 +1762,25 @@ impl AuthorityState {
             .as_ref()
             .map(|environment| environment.world_time)
             .unwrap_or(self.next_tick);
-        let stored = Self::map_chat_plan_to_stored(&checked, &installed.command, start_tick);
+        let deadline_ticks = timeout_minutes.map(|minutes| {
+            super::companion_runner::task_deadline_ticks(
+                start_tick,
+                minutes,
+                super::companion_runner::plan_follow_tail(&checked.steps),
+            )
+        });
+        let stored = Self::map_chat_plan_to_stored(
+            &checked,
+            &installed.command,
+            start_tick,
+            deadline_ticks.unwrap_or(0),
+        );
+        if deadline_ticks.is_some() {
+            self.companion_runners.insert(
+                id,
+                TaskRunner::installed(generation, deadline_ticks.unwrap_or(0)),
+            );
+        }
         if let Some(runtime) = self.residents.runtimes.get_mut(&ActorKey::Companion(id))
             && let ActorAux::Companion {
                 generation: current,
@@ -1749,6 +1807,322 @@ impl AuthorityState {
             ))?;
         self.companion_chat.reserve_external_lifecycle()?;
         Ok(true)
+    }
+
+    /// Advances every running companion task by one runner pass at a
+    /// tick boundary: delivered path outcomes are applied first, then
+    /// expiry, then step movement, in the Go tick order. Movement
+    /// actions and path searches are returned as effects; the runtime
+    /// runs the searches and hands their outcomes back no earlier than
+    /// the next pass, so a search never moves a companion in the tick
+    /// that issued it. Terminal effects finish through the existing
+    /// finish path, which clears only the current task slot.
+    pub fn advance_companion_runners(
+        &mut self,
+        delivered: Vec<CompanionPathOutcome>,
+    ) -> Result<CompanionRunnerOutput, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        // Snapshot phase: every settled read happens while the view is
+        // alive, including the tick-boundary path grids, so the apply
+        // phase below never borrows the view and state at once.
+        struct RunnerSnapshot {
+            id: CompanionId,
+            current: CompanionChatTask,
+            steps: Vec<PlanStep>,
+            position: [f32; 3],
+            follow: FollowObservation,
+            current_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
+            grid: Option<mornlea_engine::native::contracts::pathfind::PathGrid>,
+            stored: (usize, u64),
+        }
+        let snapshots: Vec<RunnerSnapshot> = {
+            let view = self.settled_read()?;
+            let mut ids: Vec<CompanionId> = view
+                .actors()
+                .iter()
+                .filter_map(|actor| match actor.key {
+                    ActorKey::Companion(id) if actor.lifecycle == ActorLifecycle::Active => {
+                        Some(id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            ids.sort_by_key(|id| id.bytes());
+            ids.dedup();
+            let mut snapshots = Vec::new();
+            for id in ids {
+                let Some(current) = self.companion_chat.current_task(id).cloned() else {
+                    continue;
+                };
+                if current.phase != super::companion_chat::CompanionChatPhase::Running {
+                    continue;
+                }
+                let Some(actor) = view.actor(ActorKey::Companion(id)).cloned() else {
+                    continue;
+                };
+                let position = actor.motion.position().get();
+                let stored_task = self
+                    .residents
+                    .runtimes
+                    .get(&ActorKey::Companion(id))
+                    .and_then(|runtime| match &runtime.aux {
+                        ActorAux::Companion { task, .. } => Some(task.clone()),
+                        _ => None,
+                    });
+                let steps: Vec<PlanStep> = match &current.plan {
+                    Some(plan) => plan.steps.clone(),
+                    None => stored_task
+                        .as_ref()
+                        .map(Self::stored_plan_steps)
+                        .unwrap_or_default(),
+                };
+                if steps.is_empty() {
+                    continue;
+                }
+                let stored = stored_task
+                    .as_ref()
+                    .map(|task| {
+                        (
+                            usize::try_from(task.step_index.max(0)).unwrap_or(0),
+                            task.deadline_ticks,
+                        )
+                    })
+                    .unwrap_or((0, 0));
+                let step_index = self
+                    .companion_runners
+                    .get(&id)
+                    .map_or(stored.0, TaskRunner::step_index);
+                let follow = match steps.get(step_index) {
+                    Some(PlanStep::Follow { player_id }) => {
+                        let target = view.online_players().find_map(|player| {
+                            let ActorKey::Player(session) = player.key else {
+                                return None;
+                            };
+                            let record = self.sessions.get(&session)?;
+                            (record.player_id == *player_id)
+                                .then(|| (player.motion.position().get(), player.dimension))
+                        });
+                        match target {
+                            Some((target_position, dimension)) if dimension == actor.dimension => {
+                                FollowObservation::Online {
+                                    position: target_position,
+                                }
+                            }
+                            Some(_) => FollowObservation::Away { offline: false },
+                            None => FollowObservation::Away { offline: true },
+                        }
+                    }
+                    _ => FollowObservation::NotFollow,
+                };
+                let needs_grid = self
+                    .companion_runners
+                    .get(&id)
+                    .is_none_or(|runner| !runner.path_outstanding() && !runner.has_path());
+                // Current revisions of the 3x3 chunk window around the
+                // companion, for carried-path revalidation; a chunk
+                // that is not Ready is simply absent and fails closed.
+                let center_chunk = mornlea_domain::ChunkPos::new(
+                    (position[0].floor() as i32).div_euclid(16),
+                    (position[2].floor() as i32).div_euclid(16),
+                );
+                let mut current_revisions = Vec::with_capacity(9);
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        let chunk = mornlea_domain::ChunkPos::new(
+                            center_chunk.x() + dx,
+                            center_chunk.z() + dz,
+                        );
+                        let key = ChunkKey {
+                            dimension: actor.dimension,
+                            pos: chunk,
+                        };
+                        if let Some(revision) = view.ready_chunk_revision(key) {
+                            current_revisions.push((chunk, revision));
+                        }
+                    }
+                }
+                let grid = if needs_grid {
+                    super::companion_runner::build_path_grid(
+                        &view,
+                        actor.dimension,
+                        super::companion_runner::standing_cell(position),
+                    )
+                } else {
+                    None
+                };
+                snapshots.push(RunnerSnapshot {
+                    id,
+                    current,
+                    steps,
+                    position,
+                    follow,
+                    current_revisions,
+                    grid,
+                    stored,
+                });
+            }
+            snapshots
+        };
+        let world_time = self.settled_read()?.world_time();
+        let tick = self.next_tick;
+        // Apply phase: pure runner transitions, then the effects.
+        let mut output = CompanionRunnerOutput::default();
+        for mut snapshot in snapshots {
+            let id = snapshot.id;
+            let mut grid = snapshot.grid.take();
+            let generation = snapshot.current.generation;
+            self.companion_runners.entry(id).or_insert_with(|| {
+                TaskRunner::restored(generation, snapshot.stored.0, snapshot.stored.1)
+            });
+            let mut finished = false;
+            for outcome in delivered.iter().filter(|outcome| outcome.companion == id) {
+                let effects = self
+                    .companion_runners
+                    .get_mut(&id)
+                    .expect("runner present")
+                    .on_path_outcome(tick, outcome.generation, outcome.outcome.clone());
+                for effect in effects {
+                    if let RunnerEffect::Finish(state) = effect {
+                        self.finish_companion_chat_task(id, generation, state)?;
+                        finished = true;
+                    }
+                }
+                if finished {
+                    break;
+                }
+            }
+            if finished {
+                continue;
+            }
+            let effects = self
+                .companion_runners
+                .get_mut(&id)
+                .expect("runner present")
+                .on_tick(
+                    &snapshot.steps,
+                    &RunnerTick {
+                        tick,
+                        world_time,
+                        position: snapshot.position,
+                        follow: snapshot.follow,
+                        current_revisions: snapshot.current_revisions,
+                    },
+                );
+            for effect in effects {
+                match effect {
+                    RunnerEffect::RequestPath { goal, .. } => match grid.take() {
+                        Some(grid) => output.path_requests.push(CompanionPathRequest {
+                            companion: id,
+                            generation,
+                            start: super::companion_runner::standing_cell(snapshot.position),
+                            goal,
+                            grid,
+                        }),
+                        None => {
+                            if let Some(runner) = self.companion_runners.get_mut(&id) {
+                                runner.defer_outstanding();
+                            }
+                        }
+                    },
+                    RunnerEffect::Move(action) => output.actions.push((id, action)),
+                    RunnerEffect::StepProgress { step_index } => {
+                        if let Some(runtime) =
+                            self.residents.runtimes.get_mut(&ActorKey::Companion(id))
+                            && let ActorAux::Companion { task, .. } = &mut runtime.aux
+                        {
+                            task.step_index = i32::try_from(step_index).unwrap_or(i32::MAX);
+                        }
+                        let companion = self
+                            .companion_chat
+                            .speaker(id)
+                            .expect("configured companion has a speaker");
+                        self.companion_chat
+                            .push_decided(DecidedChatFact::broadcast(
+                                snapshot.current.issuer.player_id,
+                                snapshot.current.issuer.player_name.clone(),
+                                ChatBody::Task {
+                                    companion,
+                                    command: snapshot.current.command.clone(),
+                                    state: TaskState::Progress,
+                                },
+                            ))?;
+                    }
+                    RunnerEffect::Finish(state) => {
+                        self.finish_companion_chat_task(id, generation, state)?;
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+
+    /// Converts a stored running task's steps back to checked plan
+    /// steps for the runner, in their original order and positions, so
+    /// the stored step index keeps naming the same step for any step
+    /// mix. Mine and place steps are restored faithfully even though
+    /// their executor is separate work; unknown kinds are skipped
+    /// rather than invented.
+    fn stored_plan_steps(task: &StoredCompanionTask) -> Vec<PlanStep> {
+        task.plan_steps
+            .iter()
+            .filter_map(|step| match step.kind {
+                COMPANION_PLAN_STEP_GO_TO => Some(PlanStep::GoTo {
+                    x: step.x,
+                    y: step.y,
+                    z: step.z,
+                }),
+                COMPANION_PLAN_STEP_MINE => Some(PlanStep::Mine {
+                    x: step.x,
+                    y: step.y,
+                    z: step.z,
+                }),
+                COMPANION_PLAN_STEP_PLACE => Some(PlanStep::Place {
+                    x: step.x,
+                    y: step.y,
+                    z: step.z,
+                    block: Self::plan_block_from_stored_id(step.block)?,
+                }),
+                COMPANION_PLAN_STEP_FOLLOW => Some(PlanStep::Follow {
+                    player_id: PlayerId::try_from_bytes(step.player_id.to_bytes()).ok()?,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Reverse of the place-block table: the stored block id back to
+    /// the checked plan block. Ids outside the table have no plan
+    /// form, matching the forward table's closed registry.
+    fn plan_block_from_stored_id(block: u16) -> Option<PlanBlock> {
+        Some(match block {
+            21 => PlanBlock::Brick,
+            11 => PlanBlock::Chest,
+            24 => PlanBlock::Clay,
+            13 => PlanBlock::Cobblestone,
+            3 => PlanBlock::Dirt,
+            9 => PlanBlock::Furnace,
+            20 => PlanBlock::Glass,
+            4 => PlanBlock::Grass,
+            16 => PlanBlock::Gravel,
+            10 => PlanBlock::IronBlock,
+            19 => PlanBlock::Leaves,
+            12 => PlanBlock::LightBlock,
+            26 => PlanBlock::MossyCobblestone,
+            17 => PlanBlock::OakLog,
+            18 => PlanBlock::OakPlanks,
+            23 => PlanBlock::RoofTile,
+            15 => PlanBlock::Sand,
+            14 => PlanBlock::SmoothStone,
+            25 => PlanBlock::SnowBlock,
+            2 => PlanBlock::Stone,
+            6 => PlanBlock::StoneBrick,
+            22 => PlanBlock::WhiteWool,
+            45 => PlanBlock::Workbench,
+            _ => return None,
+        })
     }
 
     /// Finishes a chat task with a terminal lifecycle state.
@@ -1797,6 +2171,7 @@ impl AuthorityState {
         let Some(finished) = self.companion_chat.commit_finish(id, generation, state) else {
             return Ok(false);
         };
+        self.companion_runners.remove(&id);
         self.clear_finished_companion_runtime(id, state);
         let companion = self
             .companion_chat
@@ -1861,13 +2236,14 @@ impl AuthorityState {
     /// Maps a checked agent plan into the stored companion task shape.
     ///
     /// Go-to, mine, place, and terminal-follow steps become stored kinds
-    /// 1..4 through the shared place-block table. The deadline stays zero:
-    /// no deadline policy lives on this seam, so the existing runner
-    /// composition owns it until it is composed.
+    /// 1..4 through the shared place-block table. The caller stamps the
+    /// deadline: the install seam without timeout minutes keeps zero,
+    /// the runner seam passes the Running-entry deadline.
     fn map_chat_plan_to_stored(
         plan: &AgentPlan,
         command: &CommandText,
         start_tick: u64,
+        deadline_ticks: u64,
     ) -> StoredCompanionTask {
         let steps = plan
             .steps
@@ -1913,7 +2289,7 @@ impl AuthorityState {
             step_index: 0,
             state: COMPANION_TASK_RUNNING,
             start_tick,
-            deadline_ticks: 0,
+            deadline_ticks,
             fail_reason: 0,
         }
     }
@@ -19361,6 +19737,384 @@ mod companion_chat_boundary_tests {
             )
             .unwrap());
         assert_eq!(a.chat_queue.len(), 1);
+    }
+
+    /// Runner install stamps the deadline at Running entry from the bare
+    /// timeout minutes; a follow-tail plan keeps the zero deadline.
+    #[test]
+    fn runner_install_stamps_deadline_and_follow_exempt() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let world_time = a.settled_read().unwrap().world_time();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
+                .unwrap()
+        );
+        let task = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(task.state, COMPANION_TASK_RUNNING);
+        assert_eq!(task.start_tick, world_time);
+        assert_eq!(task.deadline_ticks, 0, "follow-tail plan stays exempt");
+    }
+
+    /// A go-to install stamps the real deadline, and expiry finishes
+    /// only the current task: the companion, its inventory, and the
+    /// pending FIFO survive, with the terminal fact visible.
+    #[test]
+    fn runner_timeout_finishes_only_current_task() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
+                .unwrap()
+        );
+        let task = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(task.deadline_ticks, task.start_tick + 1200);
+        assert_ne!(task.deadline_ticks, 0);
+        // Queue a second command behind the running task.
+        a.submit(session, chat("@阿木 next")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        let inventory_before = a
+            .residents
+            .inventories
+            .get(&ActorKey::Companion(id))
+            .cloned();
+        // World time reaches the deadline: the task times out.
+        a.metadata.world_time_ticks = task.deadline_ticks;
+        let output = a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(output.actions.is_empty());
+        let queue = a.companion_chat_queue(id).unwrap();
+        assert!(queue.current.is_none(), "timed-out task leaves the slot");
+        assert_eq!(queue.pending.len(), 1, "pending FIFO is unaffected");
+        assert!(
+            a.residents
+                .actors
+                .iter()
+                .any(|actor| actor.key == ActorKey::Companion(id)),
+            "companion persists after timeout"
+        );
+        assert_eq!(
+            a.residents.inventories.get(&ActorKey::Companion(id)),
+            inventory_before.as_ref(),
+            "inventory is byte-identical after timeout"
+        );
+        let stored = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(stored.state, COMPANION_TASK_TIMED_OUT);
+        let facts = a.take_decided_chat_facts();
+        assert!(
+            facts.iter().any(|fact| matches!(
+                fact.body,
+                ChatBody::Task {
+                    state: TaskState::TimedOut,
+                    ..
+                }
+            )),
+            "terminal TimedOut fact is visible: {facts:?}"
+        );
+    }
+
+    /// Without Ready chunks the path grid defers: no request is issued,
+    /// no failure is recorded, and the task stays Running.
+    #[test]
+    fn runner_path_grid_not_ready_defers_without_failure() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, plan, 10)
+                .unwrap()
+        );
+        for _ in 0..3 {
+            let output = a.advance_companion_runners(Vec::new()).unwrap();
+            assert!(output.path_requests.is_empty());
+            assert!(output.actions.is_empty());
+        }
+        let queue = a.companion_chat_queue(id).unwrap();
+        assert!(queue.current.is_some(), "deferred task stays running");
+        let runner = a.companion_runners.get(&id).expect("runner present");
+        assert_eq!(runner.consecutive_failures(), 0);
+        assert!(!runner.path_outstanding());
+    }
+
+    /// Restore keeps mine and place steps in their original positions,
+    /// so the stored step index still names the same step.
+    #[test]
+    fn stored_plan_steps_restore_mine_and_place_in_order() {
+        let mut task = StoredCompanionTask {
+            command: "build".to_owned(),
+            state: COMPANION_TASK_RUNNING,
+            start_tick: 3,
+            deadline_ticks: 99,
+            ..StoredCompanionTask::default()
+        };
+        task.plan_steps = vec![
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_GO_TO,
+                x: 1,
+                y: 64,
+                z: 2,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_MINE,
+                x: 3,
+                y: 64,
+                z: 4,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_PLACE,
+                x: 5,
+                y: 64,
+                z: 6,
+                block: 2,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_GO_TO,
+                x: 7,
+                y: 64,
+                z: 8,
+                ..StoredPlanStep::default()
+            },
+        ];
+        assert_eq!(
+            AuthorityState::stored_plan_steps(&task),
+            vec![
+                PlanStep::GoTo { x: 1, y: 64, z: 2 },
+                PlanStep::Mine { x: 3, y: 64, z: 4 },
+                PlanStep::Place {
+                    x: 5,
+                    y: 64,
+                    z: 6,
+                    block: PlanBlock::Stone,
+                },
+                PlanStep::GoTo { x: 7, y: 64, z: 8 },
+            ]
+        );
+    }
+
+    /// A restored mine-only task has no executor in this slice, but its
+    /// deadline still expires it exactly at the deadline tick.
+    #[test]
+    fn restored_mine_only_task_still_times_out() {
+        let mut a = fresh();
+        let (id, name) = amu();
+        let actor = companion_actor(id);
+        let raw = mornlea_storage::PlayerId::from_bytes(id.bytes());
+        let loaded = mornlea_storage::StoredCompanions {
+            source_schema: 5,
+            revision: 1,
+            agent_namespace_id: raw,
+            records: vec![match &actor.body {
+                ActorBody::Companion(body) => body.clone(),
+                _ => unreachable!(),
+            }],
+            lifecycles: vec![mornlea_storage::StoredCompanionLifecycle {
+                id: raw,
+                active: true,
+                memory_epoch: 1,
+                memory_revision: 0,
+                memory_operation_id: Default::default(),
+                summary: String::new(),
+                tombstone_operation_id: Default::default(),
+            }],
+            queues: vec![mornlea_storage::StoredCompanionQueue {
+                id: raw,
+                has_current: true,
+                current: StoredCompanionTask {
+                    command: "mine".to_owned(),
+                    state: COMPANION_TASK_RUNNING,
+                    plan_steps: vec![StoredPlanStep {
+                        kind: COMPANION_PLAN_STEP_MINE,
+                        x: 9,
+                        y: 65,
+                        z: 8,
+                        ..StoredPlanStep::default()
+                    }],
+                    start_tick: 7,
+                    deadline_ticks: 50,
+                    ..StoredCompanionTask::default()
+                },
+                pending: Vec::new(),
+                summary: String::new(),
+            }],
+        };
+        let (book, tasks) = CompanionChatBook::from_persisted(&[(id, name)], &loaded).unwrap();
+        a.companion_chat = book;
+        a.residents.actors.push(actor);
+        let mut runtime = companion_runtime(id);
+        if let ActorAux::Companion {
+            generation, task, ..
+        } = &mut runtime.aux
+        {
+            *generation = tasks[&id].0;
+            *task = tasks[&id].1.clone();
+        }
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), runtime);
+        a.metadata.world_time_ticks = 50;
+        let output = a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(output.actions.is_empty());
+        assert!(a.companion_chat_queue(id).unwrap().current.is_none());
+        let stored = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(stored.state, COMPANION_TASK_TIMED_OUT);
+    }
+
+    /// Stopping a task clears its runner state: a later task installed
+    /// through the plain seam pathfinds with a fresh generation and
+    /// deadline instead of inheriting a dangling outstanding request.
+    #[test]
+    fn stop_clears_runner_state_for_the_next_task() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 follow")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
+                .unwrap()
+        );
+        // Give the runner a stale deadline and a dangling request.
+        a.companion_runners
+            .insert(id, TaskRunner::installed(1, 9999));
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let steps = vec![PlanStep::Follow { player_id: player }];
+        let effects = a.companion_runners.get_mut(&id).unwrap().on_tick(
+            &steps,
+            &RunnerTick {
+                tick: 5,
+                world_time: 0,
+                position: [8.5, 65.0, 8.5],
+                follow: FollowObservation::Online {
+                    position: [30.5, 65.0, 8.5],
+                },
+                current_revisions: Vec::new(),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        assert!(a.companion_runners.get(&id).unwrap().path_outstanding());
+        // Stop the follow task; its runner state must leave with it.
+        a.submit(session, chat("@阿木 停止")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert!(
+            !a.companion_runners.contains_key(&id),
+            "stop must clear the runner state"
+        );
+        // A new task through the plain install seam runs normally.
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(a.install_companion_chat_plan(id, 2, plan).unwrap());
+        let output = a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(output.actions.is_empty());
+        let runner = a.companion_runners.get(&id).expect("fresh runner");
+        assert_eq!(runner.generation(), 2);
+        assert_eq!(runner.deadline_ticks(), 0);
+        assert!(
+            !runner.path_outstanding(),
+            "grid deferral clears the request"
+        );
+        assert_eq!(runner.consecutive_failures(), 0);
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
     }
 
     /// Preparing at the extreme tick captures that exact source tick with

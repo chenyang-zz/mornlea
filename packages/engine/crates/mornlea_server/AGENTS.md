@@ -33,8 +33,9 @@ enforced by `runtime::config::tests::dependency_direction_forbids_runtime_import
 `runtime::config` freezes the `ai` group into `AiConfig` only when at least one
 companion is configured (ids, names, endpoint, credential variable name, and
 `taskTimeoutMinutes`, default 10); acceptance is unchanged and still pinned by
-the shared parity fixtures. Persona text is not frozen. The task timeout is
-frozen but unused until the task runner lands.
+the shared parity fixtures. Persona text is not frozen. The frozen timeout
+reaches the core task runner as a bare `u32` of minutes through
+`install_companion_chat_plan_with_timeout`; deadline arithmetic lives in core.
 
 `runtime::companion::start_companions` mirrors the Go `NewHost` companion
 bootstrap against the world store before it moves into the scheduler and an
@@ -48,9 +49,11 @@ loaded (missing is empty, corrupt/future/I/O failures stop), merged through
 loopback `McpService` start, and only then does `enable_companion_persistence`
 receive the aggregate. Any failure retires what already started. A refused
 lease acquire stays on the control worker and never blocks startup or a tick.
-Python is never launched here. Planning snapshots, outcome install, the task
-runner and task timeouts are not assembled yet; persona stays with the dialogue
-work.
+Python is never launched here. Planning snapshots and outcome install are
+accepted library capabilities; the go_to/follow task runner, its timeout, and
+companion path requests live in `core/companion_runner.rs` with the pending
+path plumbing in `runtime/companion_runner.rs`, but the production plan loop
+that drives them is not assembled yet; persona stays with the dialogue work.
 
 Core has no non-Overworld companion yet. When companions are configured, a
 non-Overworld spawn dimension refuses startup with the typed
