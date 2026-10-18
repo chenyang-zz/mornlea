@@ -514,6 +514,35 @@ impl PlanHost {
         self.dialogues.contains_key(&companion)
     }
 
+    /// Companions with a polled plan outcome waiting for tick install,
+    /// in outcome order. Dialogue outcomes are not listed.
+    pub fn outcome_companions(&self) -> Vec<CompanionId> {
+        let mut companions = Vec::new();
+        for outcome in &self.outcomes {
+            if let QueuedOutcome::Plan { companion, .. } = outcome
+                && !companions.contains(companion)
+            {
+                companions.push(*companion);
+            }
+        }
+        companions
+    }
+
+    /// Releases one companion's plan gate when it still names this
+    /// attempt, returning whether a gate was released. A newer slot is
+    /// never cleared by an older attempt.
+    pub fn clear_plan_gate(&mut self, companion: CompanionId, attempt: u64) -> bool {
+        if self
+            .plans
+            .get(&companion)
+            .is_some_and(|slot| slot.attempt == attempt)
+        {
+            self.plans.remove(&companion);
+            return true;
+        }
+        false
+    }
+
     /// Number of valid plans waiting for the task runner.
     pub fn task_len(&self) -> usize {
         self.tasks.len()
@@ -1037,6 +1066,29 @@ impl PlanHost {
     /// admits it and the runner emits the first action. Older queued attempts
     /// cannot clear newer slots; invalid identities release their own slot.
     pub fn install(&mut self, tick: u64, lease_fence: u64, world: &CurrentWorld) -> InstallReport {
+        self.install_worlds(tick, lease_fence, &|_| Some(world))
+    }
+
+    /// Installs queued outcomes like [`Self::install`], but revalidates
+    /// each plan against its own companion's current world. A companion
+    /// with no world supplied is rejected as world changed: its plan is
+    /// discarded and its gate released, exactly as if revalidation had
+    /// found the world drifted.
+    pub fn install_each(
+        &mut self,
+        tick: u64,
+        lease_fence: u64,
+        worlds: &std::collections::BTreeMap<CompanionId, CurrentWorld>,
+    ) -> InstallReport {
+        self.install_worlds(tick, lease_fence, &|companion| worlds.get(&companion))
+    }
+
+    fn install_worlds<'w>(
+        &mut self,
+        tick: u64,
+        lease_fence: u64,
+        world_for: &dyn Fn(CompanionId) -> Option<&'w CurrentWorld>,
+    ) -> InstallReport {
         let mut report = InstallReport::default();
         let outcomes: Vec<QueuedOutcome> = self.outcomes.drain(..).collect();
         for outcome in outcomes {
@@ -1049,7 +1101,7 @@ impl PlanHost {
                     &mut report,
                     tick,
                     lease_fence,
-                    world,
+                    world_for(companion),
                     companion,
                     attempt,
                     &response,
@@ -1071,7 +1123,7 @@ impl PlanHost {
         report: &mut InstallReport,
         tick: u64,
         lease_fence: u64,
-        world: &CurrentWorld,
+        world: Option<&CurrentWorld>,
         companion: CompanionId,
         attempt: u64,
         response: &PlanResponse,
@@ -1103,6 +1155,15 @@ impl PlanHost {
             });
             return;
         }
+        let Some(world) = world else {
+            self.plans.remove(&companion);
+            report.rejected.push(InstallRejection {
+                companion,
+                attempt,
+                reason: InstallReject::WorldChanged,
+            });
+            return;
+        };
         if validate_against_current(slot, &response.plan, world).is_err() {
             self.plans.remove(&companion);
             report.rejected.push(InstallRejection {
