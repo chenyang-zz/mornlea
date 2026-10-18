@@ -506,7 +506,8 @@ fn current_world_matches_go_fixtures() {
         let world = fixture
             .authority
             .companion_current_world(fixture.companion)
-            .unwrap_or_else(|error| panic!("{name}: current world failed: {error:?}"));
+            .unwrap_or_else(|error| panic!("{name}: current world failed: {error:?}"))
+            .unwrap_or_else(|changed| panic!("{name}: current world changed: {changed:?}"));
         let terrain = expected_terrain(expected);
         let mut blocks = BTreeMap::new();
         for x in 0..33 {
@@ -588,7 +589,10 @@ fn planning_snapshot_requires_a_current_task() {
         })
     );
     // The current-world rebuild does not depend on the task.
-    assert!(fixture.authority.companion_current_world(idle).is_ok());
+    assert!(matches!(
+        fixture.authority.companion_current_world(idle),
+        Ok(Ok(_))
+    ));
 }
 
 #[test]
@@ -605,7 +609,7 @@ fn projections_refuse_an_inactive_companion() {
     );
     assert_eq!(
         fixture.authority.companion_current_world(companion),
-        Err(refused)
+        Ok(Err(WorldChanged::CompanionUnavailable))
     );
 }
 
@@ -626,9 +630,7 @@ fn projections_refuse_an_invalid_companion_inventory() {
     };
     assert_eq!(
         fixture.authority.companion_current_world(companion),
-        Err(ServerError::InvalidInput {
-            field: "planning_companion"
-        })
+        Ok(Err(WorldChanged::CompanionUnavailable))
     );
 }
 
@@ -644,9 +646,7 @@ fn projections_refuse_a_window_past_the_coordinate_range() {
         companion_actor(&mut fixture.authority, companion).motion = motion(position);
         assert_eq!(
             fixture.authority.companion_current_world(companion),
-            Err(ServerError::InvalidInput {
-                field: "planning_terrain"
-            }),
+            Ok(Err(WorldChanged::TerrainUnavailable)),
             "{position:?}"
         );
     }
@@ -659,6 +659,7 @@ fn projections_read_settled_world_changes() {
     let before = fixture
         .authority
         .companion_current_world(companion)
+        .unwrap()
         .unwrap();
     let key = ChunkKey {
         dimension: Dimension::OVERWORLD,
@@ -668,6 +669,7 @@ fn projections_read_settled_world_changes() {
     let after = fixture
         .authority
         .companion_current_world(companion)
+        .unwrap()
         .unwrap();
     assert!(before.chunk_revisions.contains_key(&key.pos));
     assert!(!after.chunk_revisions.contains_key(&key.pos));
@@ -688,7 +690,65 @@ fn projections_read_settled_world_changes() {
         fixture
             .authority
             .companion_current_world(companion)
+            .unwrap()
             .unwrap(),
         before
+    );
+}
+
+#[test]
+fn current_world_missing_companion_is_companion_unavailable() {
+    let fixture = planning_fixture(FIXTURES[0].1);
+    let missing =
+        CompanionId::try_from_bytes(uuid("c0ffee00-0000-4000-8000-0000000000ee")).unwrap();
+    assert_eq!(
+        fixture.authority.companion_current_world(missing),
+        Ok(Err(WorldChanged::CompanionUnavailable))
+    );
+}
+
+#[test]
+fn current_world_closed_or_failed_authority_is_outer_error_unchanged() {
+    // A failed authority: the settled-read error must come back as the
+    // outer error, exactly as stored, never as a world-changed refusal.
+    let mut fixture = planning_fixture(FIXTURES[0].1);
+    let companion = fixture.companion;
+    let failure = ServerError::Internal {
+        invariant: "test_authority_failure",
+    };
+    let stored = fixture.authority.fail_tick(failure);
+    assert_eq!(stored, failure);
+    assert_eq!(
+        fixture.authority.companion_current_world(companion),
+        Err(failure),
+        "settled-read failure must propagate unchanged as the outer error"
+    );
+    // And it is not a world-changed classification in either kind.
+    assert!(!matches!(
+        fixture.authority.companion_current_world(companion),
+        Ok(Err(
+            WorldChanged::CompanionUnavailable | WorldChanged::TerrainUnavailable
+        ))
+    ));
+
+    // A closed authority: mark_closed flips the phase the settled read
+    // checks, so the result must be the outer InvalidState error with the
+    // exact Closed payload, never an inner world change. Matching the
+    // outer Err here is the discrimination itself: an inner refusal would
+    // arrive as Ok(Err(_)) and fail this assertion.
+    let mut closed = planning_fixture(FIXTURES[0].1);
+    let companion = closed.companion;
+    closed.authority.mark_closed();
+    let result = closed.authority.companion_current_world(companion);
+    assert_eq!(
+        result,
+        Err(ServerError::InvalidState {
+            phase: ServerPhase::Closed
+        }),
+        "closed authority must propagate as the outer error, unchanged"
+    );
+    assert!(
+        !matches!(result, Ok(Err(_))),
+        "closed authority must not be classified as a world change"
     );
 }

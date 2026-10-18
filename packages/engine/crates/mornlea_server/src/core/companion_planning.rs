@@ -129,6 +129,34 @@ fn terrain_error() -> ServerError {
     }
 }
 
+/// The two ways rebuilding one companion's current world can refuse,
+/// distinct from an authority failure.
+///
+/// A refusal means only that this companion's world changed: the caller
+/// discards the plan as world changed, like Go
+/// `plannerOutcomeMatchesCurrentAuthority` returning false. It concerns
+/// this companion only and is never an authority error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldChanged {
+    /// The companion is not active, or its inventory is missing or invalid.
+    CompanionUnavailable,
+    /// The planning window cannot be read from settled authority: it lies
+    /// past the coordinate range, or a ready cell, height, block, or chunk
+    /// revision is unreadable.
+    TerrainUnavailable,
+}
+
+/// The settled-authority error the planning snapshot has always returned
+/// for a world-changed refusal; the snapshot signature is unchanged.
+fn world_changed_error(changed: WorldChanged) -> ServerError {
+    match changed {
+        WorldChanged::CompanionUnavailable => ServerError::InvalidInput {
+            field: "planning_companion",
+        },
+        WorldChanged::TerrainUnavailable => terrain_error(),
+    }
+}
+
 fn block_y_valid(pos: Option<BlockPos>) -> bool {
     pos.is_none_or(|pos| (WORLD_MIN_Y..WORLD_MAX_Y).contains(&pos.y()))
 }
@@ -155,8 +183,10 @@ impl AuthorityState {
                 .ok_or(ServerError::InvalidInput {
                     field: "planning_task",
                 })?;
-        let live = self.planning_companion(&view, companion)?;
-        let projection = planning_projection(&view, live.actor)?;
+        let live = self
+            .planning_companion(&view, companion)
+            .map_err(world_changed_error)?;
+        let projection = planning_projection(&view, live.actor).map_err(world_changed_error)?;
         let issuer = &task.issuer;
         if !block_y_valid(issuer.look_hit) {
             return Err(ServerError::InvalidInput {
@@ -206,22 +236,28 @@ impl AuthorityState {
     /// cells and chunks fail closed in plan install. `tick` is the same
     /// completed-tick count as the planning snapshot's source tick.
     ///
-    /// An `InvalidInput` refusal (inactive companion, missing or invalid
-    /// inventory, a window past the coordinate range, or an unreadable ready
-    /// cell) means only that this companion's world changed: the caller
-    /// discards the plan as world changed, like Go
-    /// `plannerOutcomeMatchesCurrentAuthority` returning false. It concerns
-    /// this companion only and is never an authority error; the caller must
-    /// not fence the tick or fail the server on it. Only the settled read
-    /// itself can return an authority state error (an already fenced or
-    /// closed authority), which this projection passes through unchanged.
+    /// The inner result distinguishes a per-companion world change from
+    /// success: an inactive companion, a missing or invalid inventory, a
+    /// window past the coordinate range, or an unreadable ready cell yields
+    /// `Ok(Err(WorldChanged))`, and the caller discards only that
+    /// companion's plan. Only the settled read itself can return an
+    /// authority state error (an already fenced or closed authority),
+    /// which this projection passes through unchanged as the outer error;
+    /// the caller must not fence the tick or fail the server on a world
+    /// change, and must never treat an authority error as one.
     pub fn companion_current_world(
         &self,
         companion: CompanionId,
-    ) -> Result<CurrentWorld, ServerError> {
+    ) -> Result<Result<CurrentWorld, WorldChanged>, ServerError> {
         let view = self.settled_read()?;
-        let live = self.planning_companion(&view, companion)?;
-        let projection = planning_projection(&view, live.actor)?;
+        let live = match self.planning_companion(&view, companion) {
+            Ok(live) => live,
+            Err(changed) => return Ok(Err(changed)),
+        };
+        let projection = match planning_projection(&view, live.actor) {
+            Ok(projection) => projection,
+            Err(changed) => return Ok(Err(changed)),
+        };
         let mut blocks = BTreeMap::new();
         for dx in 0..WINDOW_X as i32 {
             for dy in 0..WINDOW_Y as i32 {
@@ -237,7 +273,7 @@ impl AuthorityState {
                 }
             }
         }
-        Ok(CurrentWorld {
+        Ok(Ok(CurrentWorld {
             tick: view.tick(),
             blocks,
             chunk_revisions: projection
@@ -251,7 +287,7 @@ impl AuthorityState {
                 .into_iter()
                 .map(|player| (player.player_id, player.position.get()))
                 .collect(),
-        })
+        }))
     }
 
     /// Active companion actor with a canonical inventory.
@@ -259,10 +295,8 @@ impl AuthorityState {
         &self,
         view: &AuthorityReadView<'a>,
         companion: CompanionId,
-    ) -> Result<PlanningCompanion<'a>, ServerError> {
-        let refused = ServerError::InvalidInput {
-            field: "planning_companion",
-        };
+    ) -> Result<PlanningCompanion<'a>, WorldChanged> {
+        let refused = WorldChanged::CompanionUnavailable;
         let key = ActorKey::Companion(companion);
         let actor = view
             .actor(key)
@@ -304,7 +338,7 @@ impl AuthorityState {
 fn planning_projection(
     view: &AuthorityReadView<'_>,
     actor: &ActorRecord,
-) -> Result<PlanningProjection, ServerError> {
+) -> Result<PlanningProjection, WorldChanged> {
     let [x, y, z] = actor
         .motion
         .position()
@@ -313,7 +347,7 @@ fn planning_projection(
     let horizontal = f64::from(i32::MIN + RADIUS_XZ)..=f64::from(i32::MAX - RADIUS_XZ);
     let vertical = f64::from(i32::MIN + RADIUS_Y)..=f64::from(i32::MAX - RADIUS_Y);
     if !horizontal.contains(&x) || !vertical.contains(&y) || !horizontal.contains(&z) {
-        return Err(terrain_error());
+        return Err(WorldChanged::TerrainUnavailable);
     }
     let (center_x, center_y, center_z) = (x as i32, y as i32, z as i32);
     let dimension = actor.dimension;
@@ -343,9 +377,9 @@ fn planning_projection(
             }
             let height = view
                 .highest_non_air(dimension, x, z)
-                .ok_or_else(terrain_error)?;
+                .ok_or(WorldChanged::TerrainUnavailable)?;
             if height != EMPTY_COLUMN_HEIGHT && !(WORLD_MIN_Y..WORLD_MAX_Y).contains(&height) {
-                return Err(terrain_error());
+                return Err(WorldChanged::TerrainUnavailable);
             }
             let column = dx * WINDOW_Z + dz;
             projection.ready_columns[column / 8] |= 1 << (column % 8);
@@ -357,9 +391,9 @@ fn planning_projection(
                 }
                 let block = view
                     .block(dimension, BlockPos::new(x, y, z))
-                    .ok_or_else(terrain_error)?;
+                    .ok_or(WorldChanged::TerrainUnavailable)?;
                 if !mornlea_domain::registered_block(block) {
-                    return Err(terrain_error());
+                    return Err(WorldChanged::TerrainUnavailable);
                 }
                 projection.blocks[(dx * WINDOW_Y + dy) * WINDOW_Z + dz] = block;
             }
@@ -374,7 +408,9 @@ fn planning_projection(
             if !view.ready_chunk(key) {
                 continue;
             }
-            let revision = view.ready_chunk_revision(key).ok_or_else(terrain_error)?;
+            let revision = view
+                .ready_chunk_revision(key)
+                .ok_or(WorldChanged::TerrainUnavailable)?;
             projection
                 .revisions
                 .push(SnapshotChunkRevision { pos, revision });
