@@ -1489,6 +1489,12 @@ impl AuthorityState {
     /// progress, running task state, and already queued action envelopes are
     /// cleared; the pending chat FIFO and every other companion are kept.
     fn clear_stopped_companion_runtime(&mut self, id: CompanionId) {
+        // Runner state belongs to the cleared task: every path that
+        // clears or replaces a companion's current task (stop here, the
+        // terminal finish through the same helper) drops it, so a later
+        // task never inherits a stale generation, step index, deadline,
+        // or outstanding path request.
+        self.companion_runners.remove(&id);
         let key = ActorKey::Companion(id);
         if let Some(runtime) = self.residents.runtimes.get_mut(&key) {
             runtime.controls = None;
@@ -20035,6 +20041,77 @@ mod companion_chat_boundary_tests {
             _ => unreachable!(),
         };
         assert_eq!(stored.state, COMPANION_TASK_TIMED_OUT);
+    }
+
+    /// Stopping a task clears its runner state: a later task installed
+    /// through the plain seam pathfinds with a fresh generation and
+    /// deadline instead of inheriting a dangling outstanding request.
+    #[test]
+    fn stop_clears_runner_state_for_the_next_task() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 follow")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
+                .unwrap()
+        );
+        // Give the runner a stale deadline and a dangling request.
+        a.companion_runners.insert(id, TaskRunner::installed(1, 9999));
+        let player =
+            PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        let steps = vec![PlanStep::Follow { player_id: player }];
+        let effects = a.companion_runners.get_mut(&id).unwrap().on_tick(
+            &steps,
+            &RunnerTick {
+                tick: 5,
+                world_time: 0,
+                position: [8.5, 65.0, 8.5],
+                follow: FollowObservation::Online {
+                    position: [30.5, 65.0, 8.5],
+                },
+                current_revisions: Vec::new(),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        assert!(a.companion_runners.get(&id).unwrap().path_outstanding());
+        // Stop the follow task; its runner state must leave with it.
+        a.submit(session, chat("@阿木 停止")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert!(
+            a.companion_runners.get(&id).is_none(),
+            "stop must clear the runner state"
+        );
+        // A new task through the plain install seam runs normally.
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(a.install_companion_chat_plan(id, 2, plan).unwrap());
+        let output = a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(output.actions.is_empty());
+        let runner = a.companion_runners.get(&id).expect("fresh runner");
+        assert_eq!(runner.generation(), 2);
+        assert_eq!(runner.deadline_ticks(), 0);
+        assert!(!runner.path_outstanding(), "grid deferral clears the request");
+        assert_eq!(runner.consecutive_failures(), 0);
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
     }
 
     /// Preparing at the extreme tick captures that exact source tick with
