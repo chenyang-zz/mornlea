@@ -28,6 +28,10 @@
 //!   `SeasonProgressAt`, `yearIndex`) with 72000 ticks per season and 288000
 //!   per year. The season offset itself is a seed-derived assembly quantity
 //!   carried on the snapshot, not re-derived here.
+//! - Day arc and seasonized day phase: `packages/shared/core/day_phase.go`
+//!   (`DayArcTicks`, `EffectiveDayPhase`, `EffectiveDayPhaseAt`) over the
+//!   24000-tick display day; the day arc follows the year phase, and sleep,
+//!   hostiles, passives, player publication and random blocks read it here.
 //! - The absolute clock saturates instead of wrapping: the frozen acceptance
 //!   row `environment::step_restore_boundary` requires a non-wrapping clock,
 //!   which deliberately strengthens the Go `worldTime.Add(1)` wrap at the
@@ -47,6 +51,11 @@ const SEASON_LENGTH_TICKS: u64 = 72_000;
 const YEAR_TICKS: u64 = 288_000;
 /// `core.SeasonProgressAt` quantizes in-season progress to 0..255.
 const SEASON_PROGRESS_QUANTUM: u64 = 256;
+/// One display day in authority ticks, from the Go `core.DayLengthTicks`.
+const DAY_LENGTH_TICKS: u32 = 24_000;
+/// Seasonized-phase midpoint: the warp maps the day arc onto the first half
+/// of the cycle and the night arc onto the second (`core` `halfDayTicks`).
+const HALF_DAY_TICKS: u32 = DAY_LENGTH_TICKS / 2;
 
 /// Weather minutes convert at exactly 1200 authority ticks: one tick is
 /// 50ms at 20tps, from `runtime/weather.go` (`weatherTicksPerMinute`).
@@ -269,6 +278,53 @@ pub(crate) fn season_progress_at(world_time: u64, season_offset: u32) -> u8 {
     (in_season * SEASON_PROGRESS_QUANTUM / SEASON_LENGTH_TICKS) as u8
 }
 
+/// Day arc in ticks at one year phase (`core.DayArcTicks`): the sinusoidal
+/// day fraction scaled to the 24000-tick day, rounded to nearest and floored
+/// to even so both warp branches divide symmetrically. Anchors: winter
+/// solstice 8400, equinox 12000, summer solstice 15600. This is the single
+/// Rust source for the day arc; sleep settlement derives it here instead of
+/// keeping a copy, and the seasonized phase below derives it internally.
+pub(crate) fn day_arc_ticks(year_phase: f64) -> u16 {
+    let fraction = 0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin();
+    let ticks = (fraction * f64::from(DAY_LENGTH_TICKS)).round() as i64;
+    let ticks = if ticks % 2 == 1 { ticks - 1 } else { ticks };
+    ticks as u16
+}
+
+/// Seasonized display phase for one linear phase and day arc
+/// (`core.EffectiveDayPhase`): the day arc maps linearly onto the first half
+/// of the seasonized cycle and the night arc onto the second. An illegal arc
+/// (zero, odd, or over one day) returns zero rather than dividing by it.
+/// This is the single Rust source for the seasonized phase; sleep, hostiles
+/// and passives call it through `effective_day_phase_at` instead of keeping
+/// copies.
+pub(crate) fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
+    let arc_valid = day_arc != 0 && day_arc <= DAY_LENGTH_TICKS as u16 && day_arc.is_multiple_of(2);
+    if !arc_valid {
+        return 0;
+    }
+    let p = ((world_time % u64::from(DAY_LENGTH_TICKS) + u64::from(offset))
+        % u64::from(DAY_LENGTH_TICKS)) as u32;
+    let arc = u32::from(day_arc);
+    if p < arc {
+        return (p * HALF_DAY_TICKS / arc) as u16;
+    }
+    (HALF_DAY_TICKS + (p - arc) * HALF_DAY_TICKS / (DAY_LENGTH_TICKS - arc)) as u16
+}
+
+/// Combined seasonized phase (`core.EffectiveDayPhaseAt`): the day arc is
+/// always derived here, never supplied by a caller. This is the single Rust
+/// source for the combined phase; sleep, hostiles, passives, player
+/// publication and random blocks call it instead of assembling their own
+/// warp from a local year-phase or day-arc copy.
+pub(crate) fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
+    effective_day_phase(
+        world_time,
+        offset,
+        day_arc_ticks(year_phase_at(world_time, season_offset)),
+    )
+}
+
 #[cfg(test)]
 mod season_tests {
     use super::*;
@@ -359,5 +415,140 @@ mod year_phase_tests {
         assert_eq!(year_phase_at(72_000, 0), 0.25);
         assert_eq!(year_phase_at(144_000, 0), 0.5);
         assert_eq!(year_phase_at(288_000, 0), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod day_arc_tests {
+    use super::*;
+
+    /// `(year_phase, day_arc)` pins taken from the Go `core.DayArcTicks`
+    /// arithmetic in `packages/shared/core/day_phase.go`: the solstice and
+    /// equinox anchors, the quarter-year points, and the wrap past one full
+    /// year (including a negative phase) that the sinusoid folds back.
+    const DAY_ARC_PINS: [(f64, u16); 13] = [
+        (0.0, 12_000),
+        (0.125, 14_546),
+        (0.25, 15_600),
+        (0.375, 14_546),
+        (0.5, 12_000),
+        (0.625, 9_454),
+        (0.75, 8_400),
+        (0.875, 9_454),
+        (1.0, 12_000),
+        (-0.25, 8_400),
+        (1.25, 15_600),
+        (0.1, 14_116),
+        (1.0 / 3.0, 15_118),
+    ];
+
+    /// `(world_time, offset, day_arc, phase)` pins taken from the Go
+    /// `core.EffectiveDayPhase` arithmetic: the equinox identity (including
+    /// the day wrap and the `u64` extreme), the summer and winter branch
+    /// edges on either side of the arc, the extreme legal arcs, and every
+    /// illegal arc shape returning zero.
+    const EFFECTIVE_PHASE_PINS: [(u64, u16, u16, u16); 38] = [
+        (0, 0, 12_000, 0),
+        (1, 0, 12_000, 1),
+        (12_999, 0, 12_000, 12_999),
+        (13_000, 0, 12_000, 13_000),
+        (23_999, 0, 12_000, 23_999),
+        (24_000, 0, 12_000, 0),
+        (u64::MAX, 0, 12_000, 15_615),
+        (u64::MAX, 23_999, 12_000, 15_614),
+        (23_999, 1, 12_000, 0),
+        (0, 23_999, 12_000, 23_999),
+        (0, 0, 15_600, 0),
+        (7_800, 0, 15_600, 6_000),
+        (15_599, 0, 15_600, 11_999),
+        (15_600, 0, 15_600, 12_000),
+        (15_601, 0, 15_600, 12_001),
+        (19_800, 0, 15_600, 18_000),
+        (23_999, 0, 15_600, 23_998),
+        (0, 0, 8_400, 0),
+        (4_200, 0, 8_400, 6_000),
+        (8_399, 0, 8_400, 11_998),
+        (8_400, 0, 8_400, 12_000),
+        (8_401, 0, 8_400, 12_000),
+        (12_000, 0, 8_400, 14_769),
+        (23_999, 0, 8_400, 23_999),
+        (0, 0, 2, 0),
+        (1, 0, 2, 6_000),
+        (2, 0, 2, 12_000),
+        (23_999, 0, 2, 23_999),
+        (0, 0, 24_000, 0),
+        (12_000, 0, 24_000, 6_000),
+        (23_999, 0, 24_000, 11_999),
+        (0, 0, 23_998, 0),
+        (23_997, 0, 23_998, 11_999),
+        (23_998, 0, 23_998, 12_000),
+        (23_999, 0, 23_998, 18_000),
+        (12_345, 6_000, 0, 0),
+        (12_345, 6_000, 1, 0),
+        (12_345, 6_000, 12_001, 0),
+    ];
+
+    /// Illegal day arcs beyond the table above share the zero contract.
+    const ILLEGAL_ARCS: [u16; 4] = [3, 23_999, 24_001, u16::MAX];
+
+    /// `(world_time, offset, season_offset, phase)` pins taken from the Go
+    /// `core.EffectiveDayPhaseAt` arithmetic: the summer and winter solstice
+    /// anchors, the equinox identity at the year wrap, a seed-offset point
+    /// whose arc moves between adjacent ticks, and the `u64`/`u32` extremes.
+    const EFFECTIVE_PHASE_AT_PINS: [(u64, u16, u32, u16); 19] = [
+        (0, 0, 0, 0),
+        (72_000, 0, 0, 0),
+        (72_000, 7_800, 0, 6_000),
+        (72_000, 13_000, 0, 10_000),
+        (72_000, 15_600, 0, 12_000),
+        (72_000, 23_999, 0, 23_998),
+        (216_000, 0, 0, 0),
+        (216_000, 4_200, 0, 6_000),
+        (216_000, 8_399, 0, 11_998),
+        (216_000, 8_400, 0, 12_000),
+        (216_000, 23_999, 0, 23_999),
+        (0, 0, 14_818, 0),
+        (89, 0, 14_818, 81),
+        (0, 23_999, 0, 23_999),
+        (24_000, 0, 0, 0),
+        (u64::MAX, 0, 0, 13_588),
+        (u64::MAX, 23_999, u32::MAX, 15_088),
+        (1, 0, 287_999, 1),
+        (288_000, 6_000, 0, 6_000),
+    ];
+
+    #[test]
+    fn day_arc_derivation_matches_go_pins() {
+        for (year_phase, day_arc) in DAY_ARC_PINS {
+            assert_eq!(
+                day_arc_ticks(year_phase),
+                day_arc,
+                "day_arc_ticks({year_phase})"
+            );
+        }
+        for (world_time, offset, day_arc, phase) in EFFECTIVE_PHASE_PINS {
+            assert_eq!(
+                effective_day_phase(world_time, offset, day_arc),
+                phase,
+                "effective_day_phase({world_time}, {offset}, {day_arc})"
+            );
+        }
+        for day_arc in ILLEGAL_ARCS {
+            assert_eq!(
+                effective_day_phase(12_345, 6_000, day_arc),
+                0,
+                "effective_day_phase(12345, 6000, {day_arc})"
+            );
+        }
+        for (world_time, offset, season_offset, phase) in EFFECTIVE_PHASE_AT_PINS {
+            assert_eq!(
+                effective_day_phase_at(world_time, offset, season_offset),
+                phase,
+                "effective_day_phase_at({world_time}, {offset}, {season_offset})"
+            );
+        }
+        // The extra combined pin below exercises a winter arc reached
+        // through a season offset rather than a solstice world time.
+        assert_eq!(effective_day_phase_at(144_000, 12_000, 72_000), 14_769);
     }
 }

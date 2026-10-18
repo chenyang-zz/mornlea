@@ -58,7 +58,9 @@ use crate::core::contracts::{
 };
 use crate::core::interaction::{look_direction, normalized_direction, target_block};
 use crate::core::state::{AuthorityReadView, TickContext};
-use crate::rules::environment::{season_at, season_progress_at, year_phase_at};
+use crate::rules::environment::{
+    day_arc_ticks, effective_day_phase_at, season_at, season_progress_at, year_phase_at,
+};
 
 /// First bed-foot form, south (`core.BedFootSouthID`); the eight bed forms
 /// run foot south/west/north/east then head south/west/north/east.
@@ -500,45 +502,6 @@ fn bed_half_positions(target: BlockPos, block: u16) -> Option<(BlockPos, BlockPo
         target.z().checked_add(dz)?,
     );
     Some((foot, target))
-}
-
-/// Day arc in ticks at one year phase (`core.DayArcTicks`): the sinusoidal
-/// day fraction scaled to the 24000-tick day, rounded to nearest and floored
-/// to even so both warp branches divide symmetrically. Anchors: winter
-/// solstice 8400, equinox 12000, summer solstice 15600.
-fn day_arc_ticks(year_phase: f64) -> u16 {
-    let fraction = 0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin();
-    let ticks = (fraction * f64::from(DAY_LENGTH_TICKS)).round() as i64;
-    let ticks = if ticks % 2 == 1 { ticks - 1 } else { ticks };
-    ticks as u16
-}
-
-/// Seasonized display phase for one linear phase and day arc
-/// (`core.EffectiveDayPhase`): the day arc maps linearly onto the first half
-/// of the seasonized cycle and the night arc onto the second. An illegal arc
-/// (zero, odd, or over one day) returns zero rather than dividing by it.
-fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
-    let arc_valid = day_arc != 0 && day_arc <= DAY_LENGTH_TICKS as u16 && day_arc.is_multiple_of(2);
-    if !arc_valid {
-        return 0;
-    }
-    let p = ((world_time % u64::from(DAY_LENGTH_TICKS) + u64::from(offset))
-        % u64::from(DAY_LENGTH_TICKS)) as u32;
-    let arc = u32::from(day_arc);
-    if p < arc {
-        return (p * HALF_DAY_TICKS / arc) as u16;
-    }
-    (HALF_DAY_TICKS + (p - arc) * HALF_DAY_TICKS / (DAY_LENGTH_TICKS - arc)) as u16
-}
-
-/// Combined seasonized phase (`core.EffectiveDayPhaseAt`): the day arc is
-/// always derived here, never supplied by a caller.
-fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
-    effective_day_phase(
-        world_time,
-        offset,
-        day_arc_ticks(year_phase_at(world_time, season_offset)),
-    )
 }
 
 /// Inclusive display night window shared with the hostile spawn gate
