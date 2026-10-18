@@ -52,11 +52,13 @@ Python is never launched here. Planning snapshots, outcome install, the task
 runner and task timeouts are not assembled yet; persona stays with the dialogue
 work.
 
-Core has no non-Overworld companion yet (task 4.9). A non-Overworld spawn
-dimension is handled like a missing definition: the stored aggregate and its
-bytes stay unchanged, nothing spawns or starts, and a typed
-`CompanionStartWarning::NonOverworldSpawn` goes to the injected `warn` sink
-(`stderr_warning` in production).
+Core has no non-Overworld companion yet. When companions are configured, a
+non-Overworld spawn dimension refuses startup with the typed
+`CompanionStartError::NonOverworldSpawn`, matching the Go merge validation
+that rejects a companion body outside the Overworld: the stored aggregate and
+its bytes stay unchanged, nothing spawns or starts, and no identity is
+minted. With no companions configured the dimension alone never refuses;
+an existing aggregate is still retired as usual.
 
 Every endpoint the config accepts starts. `agent::endpoint::AgentEndpoint` is
 the single parser for the config and the wire and reproduces Go's real request:
