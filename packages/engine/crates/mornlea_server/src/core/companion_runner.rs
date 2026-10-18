@@ -509,7 +509,9 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            runner.on_tick(&steps, &tick(121, 0, [0.5, 64.0, 0.5])).len(),
+            runner
+                .on_tick(&steps, &tick(121, 0, [0.5, 64.0, 0.5]))
+                .len(),
             1
         );
         assert!(
@@ -518,7 +520,9 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            runner.on_tick(&steps, &tick(141, 0, [0.5, 64.0, 0.5])).len(),
+            runner
+                .on_tick(&steps, &tick(141, 0, [0.5, 64.0, 0.5]))
+                .len(),
             1
         );
         // Third consecutive failure finishes as path unreachable.
@@ -584,7 +588,14 @@ mod tests {
         assert_eq!(progress, vec![RunnerEffect::StepProgress { step_index: 1 }]);
         // The second step requests a fresh path, then completes the task.
         let _ = runner.on_tick(&steps, &tick(4, 0, [1.5, 64.0, 0.5]));
-        let _ = runner.on_path_outcome(4, 1, PathOutcome::Found { waypoints: vec![BlockPos::new(2, 64, 0)], revisions: Vec::new() });
+        let _ = runner.on_path_outcome(
+            4,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(2, 64, 0)],
+                revisions: Vec::new(),
+            },
+        );
         let done = runner.on_tick(&steps, &tick(5, 0, [2.5, 64.0, 0.5]));
         assert_eq!(done, vec![RunnerEffect::Finish(TaskState::Completed)]);
     }
@@ -609,8 +620,15 @@ mod tests {
         assert!(runner.on_tick(&steps, &changed).is_empty());
         assert!(!runner.has_path());
         assert_eq!(runner.consecutive_failures(), 0);
-        assert!(runner.on_tick(&steps, &tick(30, 0, [0.5, 64.0, 0.5])).is_empty());
-        assert_eq!(runner.on_tick(&steps, &tick(31, 0, [0.5, 64.0, 0.5])).len(), 1);
+        assert!(
+            runner
+                .on_tick(&steps, &tick(30, 0, [0.5, 64.0, 0.5]))
+                .is_empty()
+        );
+        assert_eq!(
+            runner.on_tick(&steps, &tick(31, 0, [0.5, 64.0, 0.5])).len(),
+            1
+        );
     }
 
     #[test]
@@ -660,7 +678,14 @@ mod tests {
                 goal: BlockPos::new(10, 64, 0)
             }]
         );
-        let _ = runner.on_path_outcome(1, 1, PathOutcome::Found { waypoints: vec![BlockPos::new(5, 64, 0)], revisions: Vec::new() });
+        let _ = runner.on_path_outcome(
+            1,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(5, 64, 0)],
+                revisions: Vec::new(),
+            },
+        );
         let moved = runner.on_tick(&steps, &input);
         assert!(matches!(moved.as_slice(), [RunnerEffect::Move(_)]));
         // Inside follow distance the companion holds and never completes.
@@ -734,21 +759,17 @@ pub fn build_path_grid(
     const WORLD_MIN_Y: i32 = -64;
     const WORLD_MAX_Y: i32 = 320;
 
+    // The window is always the fixed 33x9x33 around the centre, as in
+    // Go: heights are never clamped, and cells outside the world
+    // vertical range read as air in the fill below.
     let origin = PathCell {
         x: center.x().checked_sub(HORIZONTAL_RADIUS)?,
-        y: center.y().checked_sub(VERTICAL_RADIUS)?.max(WORLD_MIN_Y),
+        y: center.y().checked_sub(VERTICAL_RADIUS)?,
         z: center.z().checked_sub(HORIZONTAL_RADIUS)?,
     };
-    let top_y = center
-        .y()
-        .checked_add(VERTICAL_RADIUS)?
-        .min(WORLD_MAX_Y - 1);
-    if top_y < origin.y {
-        return None;
-    }
     let size = [
         (2 * HORIZONTAL_RADIUS + 1) as u32,
-        u32::try_from(top_y - origin.y + 1).ok()?,
+        (2 * VERTICAL_RADIUS + 1) as u32,
         (2 * HORIZONTAL_RADIUS + 1) as u32,
     ];
     let chunk_origin = [origin.x >> 4, origin.z >> 4];
@@ -786,7 +807,12 @@ pub fn build_path_grid(
         for lz in 0..size[2] as i32 {
             for ly in 0..size[1] as i32 {
                 let pos = BlockPos::new(origin.x + lx, origin.y + ly, origin.z + lz);
-                if let Some(observed) = view.observation(dimension, pos) {
+                if !(WORLD_MIN_Y..WORLD_MAX_Y).contains(&pos.y()) {
+                    // Out-of-world heights read as air, as the Go chunk
+                    // read normalises them.
+                    blocks[(lx as usize * size[2] as usize + lz as usize) * size[1] as usize
+                        + ly as usize] = 0;
+                } else if let Some(observed) = view.observation(dimension, pos) {
                     let index = (lx as usize * size[2] as usize + lz as usize) * size[1] as usize
                         + ly as usize;
                     blocks[index] = observed.block;
