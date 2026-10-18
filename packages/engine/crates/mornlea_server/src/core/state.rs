@@ -20011,8 +20011,7 @@ mod companion_chat_boundary_tests {
                 summary: String::new(),
             }],
         };
-        let (book, tasks) =
-            CompanionChatBook::from_persisted(&[(id, name)], &loaded).unwrap();
+        let (book, tasks) = CompanionChatBook::from_persisted(&[(id, name)], &loaded).unwrap();
         a.companion_chat = book;
         a.residents.actors.push(actor);
         let mut runtime = companion_runtime(id);
@@ -20067,7 +20066,8 @@ mod companion_chat_boundary_tests {
                 .unwrap()
         );
         // Give the runner a stale deadline and a dangling request.
-        a.companion_runners.insert(id, TaskRunner::installed(1, 9999));
+        a.companion_runners
+            .insert(id, TaskRunner::installed(1, 9999));
         let player =
             PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
         let steps = vec![PlanStep::Follow { player_id: player }];
@@ -20089,7 +20089,7 @@ mod companion_chat_boundary_tests {
         a.submit(session, chat("@阿木 停止")).unwrap();
         a.prepare_companion_chat().unwrap();
         assert!(
-            a.companion_runners.get(&id).is_none(),
+            !a.companion_runners.contains_key(&id),
             "stop must clear the runner state"
         );
         // A new task through the plain install seam runs normally.
@@ -20109,7 +20109,10 @@ mod companion_chat_boundary_tests {
         let runner = a.companion_runners.get(&id).expect("fresh runner");
         assert_eq!(runner.generation(), 2);
         assert_eq!(runner.deadline_ticks(), 0);
-        assert!(!runner.path_outstanding(), "grid deferral clears the request");
+        assert!(
+            !runner.path_outstanding(),
+            "grid deferral clears the request"
+        );
         assert_eq!(runner.consecutive_failures(), 0);
         assert!(a.companion_chat_queue(id).unwrap().current.is_some());
     }
