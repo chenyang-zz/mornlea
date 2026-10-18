@@ -1827,6 +1827,7 @@ impl AuthorityState {
             steps: Vec<PlanStep>,
             position: [f32; 3],
             follow: FollowObservation,
+            current_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
             grid: Option<mornlea_engine::native::contracts::pathfind::PathGrid>,
             stored: (usize, u64),
         }
@@ -1913,6 +1914,29 @@ impl AuthorityState {
                     .companion_runners
                     .get(&id)
                     .is_none_or(|runner| !runner.path_outstanding() && !runner.has_path());
+                // Current revisions of the 3x3 chunk window around the
+                // companion, for carried-path revalidation; a chunk
+                // that is not Ready is simply absent and fails closed.
+                let center_chunk = mornlea_domain::ChunkPos::new(
+                    (position[0].floor() as i32).div_euclid(16),
+                    (position[2].floor() as i32).div_euclid(16),
+                );
+                let mut current_revisions = Vec::with_capacity(9);
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        let chunk = mornlea_domain::ChunkPos::new(
+                            center_chunk.x() + dx,
+                            center_chunk.z() + dz,
+                        );
+                        let key = ChunkKey {
+                            dimension: actor.dimension,
+                            pos: chunk,
+                        };
+                        if let Some(revision) = view.ready_chunk_revision(key) {
+                            current_revisions.push((chunk, revision));
+                        }
+                    }
+                }
                 let grid = if needs_grid {
                     super::companion_runner::build_path_grid(
                         &view,
@@ -1928,6 +1952,7 @@ impl AuthorityState {
                     steps,
                     position,
                     follow,
+                    current_revisions,
                     grid,
                     stored,
                 });
@@ -1971,11 +1996,12 @@ impl AuthorityState {
                 .expect("runner present")
                 .on_tick(
                     &snapshot.steps,
-                    RunnerTick {
+                    &RunnerTick {
                         tick,
                         world_time,
                         position: snapshot.position,
                         follow: snapshot.follow,
+                        current_revisions: snapshot.current_revisions,
                     },
                 );
             for effect in effects {

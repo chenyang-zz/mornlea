@@ -59,8 +59,14 @@ pub fn plan_follow_tail(steps: &[PlanStep]) -> bool {
 /// matching the Go runner, which handles them identically.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathOutcome {
-    /// Ordered waypoints from start to goal.
-    Found(Vec<BlockPos>),
+    /// Ordered waypoints from start to goal, with the chunk revisions
+    /// the search grid carried, for per-tick revalidation.
+    Found {
+        /// Ordered waypoints from start to goal.
+        waypoints: Vec<BlockPos>,
+        /// Chunk revisions carried by the searched grid.
+        revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
+    },
     /// The search produced no path.
     Failed,
 }
@@ -79,7 +85,7 @@ pub enum FollowObservation {
 }
 
 /// Inputs for one runner tick, all read by the caller at the boundary.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RunnerTick {
     /// Completed-tick count at this boundary.
     pub tick: u64,
@@ -89,6 +95,10 @@ pub struct RunnerTick {
     pub position: [f32; 3],
     /// Follow target observation for the current step.
     pub follow: FollowObservation,
+    /// Current revisions of the chunks around the companion, read at
+    /// this tick boundary; a carried path revision missing here fails
+    /// closed.
+    pub current_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
 }
 
 /// One effect the caller applies, in the order returned.
@@ -114,6 +124,7 @@ pub struct TaskRunner {
     step_index: usize,
     deadline_ticks: u64,
     path: Option<Vec<BlockPos>>,
+    path_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
     waypoint: usize,
     consecutive_failures: u32,
     replan_at: Option<u64>,
@@ -130,6 +141,7 @@ impl TaskRunner {
             step_index: 0,
             deadline_ticks,
             path: None,
+            path_revisions: Vec::new(),
             waypoint: 0,
             consecutive_failures: 0,
             replan_at: None,
@@ -198,14 +210,19 @@ impl TaskRunner {
         }
         self.outstanding = false;
         match outcome {
-            PathOutcome::Found(waypoints) => {
+            PathOutcome::Found {
+                waypoints,
+                revisions,
+            } => {
                 self.path = Some(waypoints);
+                self.path_revisions = revisions;
                 self.waypoint = 0;
                 self.replan_at = None;
                 Vec::new()
             }
             PathOutcome::Failed => {
                 self.path = None;
+                self.path_revisions = Vec::new();
                 self.consecutive_failures = self.consecutive_failures.saturating_add(1);
                 if self.consecutive_failures >= MAX_CONSECUTIVE_PATH_FAILURES {
                     self.finished = true;
@@ -229,13 +246,14 @@ impl TaskRunner {
 
     /// Advances the task by one tick. Expiry is judged first, before any
     /// movement, matching the Go tick order.
-    pub fn on_tick(&mut self, steps: &[PlanStep], input: RunnerTick) -> Vec<RunnerEffect> {
+    pub fn on_tick(&mut self, steps: &[PlanStep], input: &RunnerTick) -> Vec<RunnerEffect> {
         if self.finished {
             return Vec::new();
         }
         if self.deadline_ticks != 0 && input.world_time >= self.deadline_ticks {
             self.finished = true;
             self.path = None;
+            self.path_revisions = Vec::new();
             return vec![RunnerEffect::Finish(TaskState::TimedOut)];
         }
         let Some(step) = steps.get(self.step_index) else {
@@ -253,6 +271,17 @@ impl TaskRunner {
         };
         let is_follow = matches!(step, PlanStep::Follow { .. });
         if self.outstanding {
+            return Vec::new();
+        }
+        // Every tick revalidates the carried path against the current
+        // settled window before any waypoint is consumed: a missing or
+        // changed revision discards the path and starts the fixed
+        // cooldown, without counting a path failure.
+        if self.path.is_some() && !self.path_still_valid(input) {
+            self.path = None;
+            self.path_revisions = Vec::new();
+            self.follow_goal = None;
+            self.replan_at = Some(input.tick.saturating_add(PATH_REPLAN_COOLDOWN_TICKS));
             return Vec::new();
         }
         let Some(path) = self.path.clone() else {
@@ -278,6 +307,7 @@ impl TaskRunner {
         }
         if self.waypoint >= path.len() {
             self.path = None;
+            self.path_revisions = Vec::new();
             self.follow_goal = None;
             if is_follow {
                 // A follow step never completes: the path ran out while
@@ -304,9 +334,27 @@ impl TaskRunner {
         ))]
     }
 
+    /// Whether the carried path may still be used: the waypoint cursor
+    /// must be inside the path and every carried chunk revision must be
+    /// present with the same value in the current window.
+    fn path_still_valid(&self, input: &RunnerTick) -> bool {
+        let Some(path) = &self.path else {
+            return false;
+        };
+        if self.waypoint >= path.len() {
+            return false;
+        }
+        self.path_revisions.iter().all(|(chunk, revision)| {
+            input
+                .current_revisions
+                .iter()
+                .any(|(current, value)| current == chunk && value == revision)
+        })
+    }
+
     /// Resolves the dynamic follow goal for this tick, or the effects
     /// that end or hold the task when there is no goal to chase.
-    fn follow_goal_for(&mut self, input: RunnerTick) -> Result<BlockPos, Vec<RunnerEffect>> {
+    fn follow_goal_for(&mut self, input: &RunnerTick) -> Result<BlockPos, Vec<RunnerEffect>> {
         match input.follow {
             FollowObservation::Online { position } => {
                 if within_follow_distance(input.position, position) {
@@ -402,6 +450,7 @@ mod tests {
             world_time,
             position,
             follow: FollowObservation::NotFollow,
+            current_revisions: Vec::new(),
         }
     }
 
@@ -420,13 +469,13 @@ mod tests {
     fn timeout_is_pure_tick_comparison() {
         let steps = vec![go_to(3, 64, 0)];
         let mut runner = TaskRunner::installed(1, task_deadline_ticks(100, 1, false));
-        let before = runner.on_tick(&steps, tick(10, 100 + 1199, [0.5, 64.0, 0.5]));
+        let before = runner.on_tick(&steps, &tick(10, 100 + 1199, [0.5, 64.0, 0.5]));
         assert!(!matches!(before.as_slice(), [RunnerEffect::Finish(_)]));
-        let at = runner.on_tick(&steps, tick(11, 100 + 1200, [0.5, 64.0, 0.5]));
+        let at = runner.on_tick(&steps, &tick(11, 100 + 1200, [0.5, 64.0, 0.5]));
         assert_eq!(at, vec![RunnerEffect::Finish(TaskState::TimedOut)]);
         // A zero deadline never expires.
         let mut exempt = TaskRunner::installed(1, 0);
-        let never = exempt.on_tick(&steps, tick(12, u64::MAX - 1, [0.5, 64.0, 0.5]));
+        let never = exempt.on_tick(&steps, &tick(12, u64::MAX - 1, [0.5, 64.0, 0.5]));
         assert!(!matches!(never.as_slice(), [RunnerEffect::Finish(_)]));
     }
 
@@ -434,7 +483,7 @@ mod tests {
     fn single_outstanding_and_cooldown_and_third_failure() {
         let steps = vec![go_to(10, 64, 0)];
         let mut runner = TaskRunner::installed(7, 0);
-        let first = runner.on_tick(&steps, tick(100, 0, [0.5, 64.0, 0.5]));
+        let first = runner.on_tick(&steps, &tick(100, 0, [0.5, 64.0, 0.5]));
         assert_eq!(
             first,
             vec![RunnerEffect::RequestPath {
@@ -445,7 +494,7 @@ mod tests {
         // No second request while one is outstanding.
         assert!(
             runner
-                .on_tick(&steps, tick(101, 0, [0.5, 64.0, 0.5]))
+                .on_tick(&steps, &tick(101, 0, [0.5, 64.0, 0.5]))
                 .is_empty()
         );
         // First failure: cooldown until tick 121, no request before it.
@@ -456,11 +505,11 @@ mod tests {
         );
         assert!(
             runner
-                .on_tick(&steps, tick(120, 0, [0.5, 64.0, 0.5]))
+                .on_tick(&steps, &tick(120, 0, [0.5, 64.0, 0.5]))
                 .is_empty()
         );
         assert_eq!(
-            runner.on_tick(&steps, tick(121, 0, [0.5, 64.0, 0.5])).len(),
+            runner.on_tick(&steps, &tick(121, 0, [0.5, 64.0, 0.5])).len(),
             1
         );
         assert!(
@@ -469,7 +518,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            runner.on_tick(&steps, tick(141, 0, [0.5, 64.0, 0.5])).len(),
+            runner.on_tick(&steps, &tick(141, 0, [0.5, 64.0, 0.5])).len(),
             1
         );
         // Third consecutive failure finishes as path unreachable.
@@ -484,7 +533,7 @@ mod tests {
         let mut next = TaskRunner::installed(8, 0);
         assert_eq!(next.consecutive_failures(), 0);
         assert_eq!(
-            next.on_tick(&steps, tick(142, 0, [0.5, 64.0, 0.5])).len(),
+            next.on_tick(&steps, &tick(142, 0, [0.5, 64.0, 0.5])).len(),
             1
         );
     }
@@ -493,7 +542,7 @@ mod tests {
     fn stale_outcome_discarded_and_defer_costs_no_failure() {
         let steps = vec![go_to(10, 64, 0)];
         let mut runner = TaskRunner::installed(3, 0);
-        let _ = runner.on_tick(&steps, tick(1, 0, [0.5, 64.0, 0.5]));
+        let _ = runner.on_tick(&steps, &tick(1, 0, [0.5, 64.0, 0.5]));
         // Wrong generation: discarded, request still outstanding.
         assert!(
             runner
@@ -507,7 +556,7 @@ mod tests {
         assert!(!runner.path_outstanding());
         assert_eq!(runner.consecutive_failures(), 0);
         assert_eq!(
-            runner.on_tick(&steps, tick(2, 0, [0.5, 64.0, 0.5])).len(),
+            runner.on_tick(&steps, &tick(2, 0, [0.5, 64.0, 0.5])).len(),
             1
         );
     }
@@ -516,25 +565,78 @@ mod tests {
     fn path_result_moves_only_on_a_later_tick() {
         let steps = vec![go_to(1, 64, 0), go_to(2, 64, 0)];
         let mut runner = TaskRunner::installed(1, 0);
-        let _ = runner.on_tick(&steps, tick(1, 0, [0.5, 64.0, 0.5]));
+        let _ = runner.on_tick(&steps, &tick(1, 0, [0.5, 64.0, 0.5]));
         // Delivering the result produces no movement by itself.
         let delivered = runner.on_path_outcome(
             1,
             1,
-            PathOutcome::Found(vec![BlockPos::new(0, 64, 0), BlockPos::new(1, 64, 0)]),
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(0, 64, 0), BlockPos::new(1, 64, 0)],
+                revisions: Vec::new(),
+            },
         );
         assert!(delivered.is_empty());
         // The next tick moves toward the first unreached waypoint.
-        let moved = runner.on_tick(&steps, tick(2, 0, [0.5, 64.0, 0.5]));
+        let moved = runner.on_tick(&steps, &tick(2, 0, [0.5, 64.0, 0.5]));
         assert!(matches!(moved.as_slice(), [RunnerEffect::Move(_)]));
         // Reaching the final waypoint of step one reports progress.
-        let progress = runner.on_tick(&steps, tick(3, 0, [1.5, 64.0, 0.5]));
+        let progress = runner.on_tick(&steps, &tick(3, 0, [1.5, 64.0, 0.5]));
         assert_eq!(progress, vec![RunnerEffect::StepProgress { step_index: 1 }]);
         // The second step requests a fresh path, then completes the task.
-        let _ = runner.on_tick(&steps, tick(4, 0, [1.5, 64.0, 0.5]));
-        let _ = runner.on_path_outcome(4, 1, PathOutcome::Found(vec![BlockPos::new(2, 64, 0)]));
-        let done = runner.on_tick(&steps, tick(5, 0, [2.5, 64.0, 0.5]));
+        let _ = runner.on_tick(&steps, &tick(4, 0, [1.5, 64.0, 0.5]));
+        let _ = runner.on_path_outcome(4, 1, PathOutcome::Found { waypoints: vec![BlockPos::new(2, 64, 0)], revisions: Vec::new() });
+        let done = runner.on_tick(&steps, &tick(5, 0, [2.5, 64.0, 0.5]));
         assert_eq!(done, vec![RunnerEffect::Finish(TaskState::Completed)]);
+    }
+
+    #[test]
+    fn stale_path_revisions_discard_without_strike_and_cool_down() {
+        let steps = vec![go_to(10, 64, 0)];
+        let mut runner = TaskRunner::installed(1, 0);
+        let _ = runner.on_tick(&steps, &tick(10, 0, [0.5, 64.0, 0.5]));
+        let _ = runner.on_path_outcome(
+            10,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(5, 64, 0), BlockPos::new(10, 64, 0)],
+                revisions: vec![(mornlea_domain::ChunkPos::new(0, 0), 5)],
+            },
+        );
+        // The world underfoot changed after the result returned: the
+        // path is discarded, a 20-tick cooldown starts, no strike lands.
+        let mut changed = tick(11, 0, [0.5, 64.0, 0.5]);
+        changed.current_revisions = vec![(mornlea_domain::ChunkPos::new(0, 0), 6)];
+        assert!(runner.on_tick(&steps, &changed).is_empty());
+        assert!(!runner.has_path());
+        assert_eq!(runner.consecutive_failures(), 0);
+        assert!(runner.on_tick(&steps, &tick(30, 0, [0.5, 64.0, 0.5])).is_empty());
+        assert_eq!(runner.on_tick(&steps, &tick(31, 0, [0.5, 64.0, 0.5])).len(), 1);
+    }
+
+    #[test]
+    fn matching_path_revisions_consume_normally() {
+        let steps = vec![go_to(10, 64, 0)];
+        let mut runner = TaskRunner::installed(1, 0);
+        let _ = runner.on_tick(&steps, &tick(10, 0, [0.5, 64.0, 0.5]));
+        let _ = runner.on_path_outcome(
+            10,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(5, 64, 0), BlockPos::new(10, 64, 0)],
+                revisions: vec![(mornlea_domain::ChunkPos::new(0, 0), 5)],
+            },
+        );
+        let mut current = tick(11, 0, [0.5, 64.0, 0.5]);
+        current.current_revisions = vec![(mornlea_domain::ChunkPos::new(0, 0), 5)];
+        let moved = runner.on_tick(&steps, &current);
+        assert!(matches!(moved.as_slice(), [RunnerEffect::Move(_)]));
+
+        // A missing current revision also fails closed, without a strike.
+        let mut missing = tick(12, 0, [0.5, 64.0, 0.5]);
+        missing.current_revisions = Vec::new();
+        assert!(runner.on_tick(&steps, &missing).is_empty());
+        assert!(!runner.has_path());
+        assert_eq!(runner.consecutive_failures(), 0);
     }
 
     #[test]
@@ -550,7 +652,7 @@ mod tests {
         input.follow = FollowObservation::Online {
             position: [10.5, 64.0, 0.5],
         };
-        let request = runner.on_tick(&steps, input);
+        let request = runner.on_tick(&steps, &input);
         assert_eq!(
             request,
             vec![RunnerEffect::RequestPath {
@@ -558,15 +660,15 @@ mod tests {
                 goal: BlockPos::new(10, 64, 0)
             }]
         );
-        let _ = runner.on_path_outcome(1, 1, PathOutcome::Found(vec![BlockPos::new(5, 64, 0)]));
-        let moved = runner.on_tick(&steps, input);
+        let _ = runner.on_path_outcome(1, 1, PathOutcome::Found { waypoints: vec![BlockPos::new(5, 64, 0)], revisions: Vec::new() });
+        let moved = runner.on_tick(&steps, &input);
         assert!(matches!(moved.as_slice(), [RunnerEffect::Move(_)]));
         // Inside follow distance the companion holds and never completes.
         input.position = [7.5, 64.0, 0.5];
-        assert!(runner.on_tick(&steps, input).is_empty());
+        assert!(runner.on_tick(&steps, &input).is_empty());
         // Offline target fails the follow task as world changed.
         input.follow = FollowObservation::Away { offline: true };
-        let failed = runner.on_tick(&steps, input);
+        let failed = runner.on_tick(&steps, &input);
         assert_eq!(
             failed,
             vec![RunnerEffect::Finish(TaskState::Failed(

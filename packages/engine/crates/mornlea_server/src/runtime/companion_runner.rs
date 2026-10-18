@@ -96,13 +96,23 @@ impl PendingCompanionPaths {
                 },
                 &mut scratch,
             ) {
-                Ok(result) => PathOutcome::Found(
-                    result
+                Ok(result) => PathOutcome::Found {
+                    waypoints: result
                         .waypoints()
                         .iter()
                         .map(|cell| BlockPos::new(cell.x, cell.y, cell.z))
                         .collect(),
-                ),
+                    revisions: result
+                        .revisions()
+                        .iter()
+                        .map(|revision| {
+                            (
+                                mornlea_domain::ChunkPos::new(revision.chunk[0], revision.chunk[1]),
+                                revision.revision,
+                            )
+                        })
+                        .collect(),
+                },
                 Err(_) => PathOutcome::Failed,
             };
             self.companions.insert(companion);
@@ -184,7 +194,7 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].generation, 1);
         match &outcomes[0].outcome {
-            PathOutcome::Found(waypoints) => {
+            PathOutcome::Found { waypoints, .. } => {
                 assert_eq!(waypoints.first(), Some(&BlockPos::new(0, 65, 0)));
                 assert_eq!(waypoints.last(), Some(&BlockPos::new(4, 65, 0)));
             }
