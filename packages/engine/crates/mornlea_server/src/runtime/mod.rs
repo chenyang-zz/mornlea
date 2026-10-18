@@ -5,10 +5,12 @@
 //! plain values after freeze and must not import this module. `companion`
 //! starts configured companions and their Agent services; `companion_runner`
 //! holds pending path searches between tick boundaries for the core task
-//! runner. The companion plan loop, shutdown ports, and the serve tick loop
-//! land in later PRs.
+//! runner; `companion_planning` assembles the companion plan loop over
+//! the Agent host and the task runner. Shutdown ports and the serve tick
+//! loop land in later PRs.
 
 pub mod companion;
+pub mod companion_planning;
 pub mod companion_runner;
 pub mod config;
 
