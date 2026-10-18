@@ -78,7 +78,7 @@ use crate::core::contracts::{
     SessionKey,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
-use crate::rules::environment::year_phase_at;
+use crate::rules::environment::effective_day_phase_at;
 
 // ---------------------------------------------------------------------------
 // Frozen numeric contract (`hostile.go` const block and
@@ -2148,39 +2148,4 @@ fn hostile_candidate_hash(seed: i64, tick: u64, x: i32, y: i32, z: i32) -> u64 {
     let hash = splitmix64((seed as u64) ^ tick);
     let hash = splitmix64(hash ^ (x as u32 as u64) ^ (z as u32 as u64));
     splitmix64(hash ^ (y as u32 as u64))
-}
-
-/// Season warp chain for day-arc and effective phase. Year phase comes from
-/// `rules::environment::year_phase_at` (the single Rust source); day-arc and
-/// effective-phase helpers stay local until those formulas are consolidated.
-const DAY_LENGTH_TICKS: u32 = 24_000;
-const HALF_DAY_TICKS: u32 = DAY_LENGTH_TICKS / 2;
-
-fn day_arc_ticks(year_phase: f64) -> u16 {
-    let fraction = 0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin();
-    let ticks = (fraction * f64::from(DAY_LENGTH_TICKS)).round() as i64;
-    let ticks = if ticks % 2 == 1 { ticks - 1 } else { ticks };
-    ticks as u16
-}
-
-fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
-    let arc_valid = day_arc != 0 && day_arc <= DAY_LENGTH_TICKS as u16 && day_arc.is_multiple_of(2);
-    if !arc_valid {
-        return 0;
-    }
-    let p = ((world_time % u64::from(DAY_LENGTH_TICKS) + u64::from(offset))
-        % u64::from(DAY_LENGTH_TICKS)) as u32;
-    let arc = u32::from(day_arc);
-    if p < arc {
-        return (p * HALF_DAY_TICKS / arc) as u16;
-    }
-    (HALF_DAY_TICKS + (p - arc) * HALF_DAY_TICKS / (DAY_LENGTH_TICKS - arc)) as u16
-}
-
-fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
-    effective_day_phase(
-        world_time,
-        offset,
-        day_arc_ticks(year_phase_at(world_time, season_offset)),
-    )
 }

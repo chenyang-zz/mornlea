@@ -13,7 +13,9 @@ use super::contracts::{
     MiningProgress, ServerError,
 };
 use super::mutation::mining_rule;
-use crate::rules::environment::{season_at, season_progress_at, year_phase_at};
+use crate::rules::environment::{
+    effective_day_phase_at, season_at, season_progress_at, year_phase_at,
+};
 use crate::rules::inventory::armor_points;
 
 pub(crate) fn project(
@@ -105,17 +107,11 @@ pub(crate) fn project(
 fn temperature(environment: &EnvironmentState, y: f32) -> i8 {
     let phase = year_phase_at(environment.world_time, environment.season_offset);
     let angle = 2.0 * std::f64::consts::PI * phase;
-    let mut arc = ((0.5 + 0.15 * angle.sin()) * 24_000.0).round() as u32;
-    if !arc.is_multiple_of(2) {
-        arc -= 1;
-    }
-    let display = ((environment.world_time % 24_000 + u64::from(environment.day_phase_offset))
-        % 24_000) as u32;
-    let effective = if display < arc {
-        display * 12_000 / arc
-    } else {
-        12_000 + (display - arc) * 12_000 / (24_000 - arc)
-    };
+    let effective = effective_day_phase_at(
+        environment.world_time,
+        environment.day_phase_offset,
+        environment.season_offset,
+    );
     let precipitation = if environment.weather == Weather::Clear {
         0.0
     } else {
