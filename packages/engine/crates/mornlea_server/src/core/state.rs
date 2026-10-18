@@ -2053,8 +2053,12 @@ impl AuthorityState {
         Ok(output)
     }
 
-    /// Converts a stored running task's steps back to checked plan steps
-    /// for the runner. Unknown kinds are skipped rather than invented.
+    /// Converts a stored running task's steps back to checked plan
+    /// steps for the runner, in their original order and positions, so
+    /// the stored step index keeps naming the same step for any step
+    /// mix. Mine and place steps are restored faithfully even though
+    /// their executor is separate work; unknown kinds are skipped
+    /// rather than invented.
     fn stored_plan_steps(task: &StoredCompanionTask) -> Vec<PlanStep> {
         task.plan_steps
             .iter()
@@ -2064,12 +2068,55 @@ impl AuthorityState {
                     y: step.y,
                     z: step.z,
                 }),
+                COMPANION_PLAN_STEP_MINE => Some(PlanStep::Mine {
+                    x: step.x,
+                    y: step.y,
+                    z: step.z,
+                }),
+                COMPANION_PLAN_STEP_PLACE => Some(PlanStep::Place {
+                    x: step.x,
+                    y: step.y,
+                    z: step.z,
+                    block: Self::plan_block_from_stored_id(step.block)?,
+                }),
                 COMPANION_PLAN_STEP_FOLLOW => Some(PlanStep::Follow {
                     player_id: PlayerId::try_from_bytes(step.player_id.to_bytes()).ok()?,
                 }),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Reverse of the place-block table: the stored block id back to
+    /// the checked plan block. Ids outside the table have no plan
+    /// form, matching the forward table's closed registry.
+    fn plan_block_from_stored_id(block: u16) -> Option<PlanBlock> {
+        Some(match block {
+            21 => PlanBlock::Brick,
+            11 => PlanBlock::Chest,
+            24 => PlanBlock::Clay,
+            13 => PlanBlock::Cobblestone,
+            3 => PlanBlock::Dirt,
+            9 => PlanBlock::Furnace,
+            20 => PlanBlock::Glass,
+            4 => PlanBlock::Grass,
+            16 => PlanBlock::Gravel,
+            10 => PlanBlock::IronBlock,
+            19 => PlanBlock::Leaves,
+            12 => PlanBlock::LightBlock,
+            26 => PlanBlock::MossyCobblestone,
+            17 => PlanBlock::OakLog,
+            18 => PlanBlock::OakPlanks,
+            23 => PlanBlock::RoofTile,
+            15 => PlanBlock::Sand,
+            14 => PlanBlock::SmoothStone,
+            25 => PlanBlock::SnowBlock,
+            2 => PlanBlock::Stone,
+            6 => PlanBlock::StoneBrick,
+            22 => PlanBlock::WhiteWool,
+            45 => PlanBlock::Workbench,
+            _ => return None,
+        })
     }
 
     /// Finishes a chat task with a terminal lifecycle state.
@@ -19852,6 +19899,142 @@ mod companion_chat_boundary_tests {
         let runner = a.companion_runners.get(&id).expect("runner present");
         assert_eq!(runner.consecutive_failures(), 0);
         assert!(!runner.path_outstanding());
+    }
+
+    /// Restore keeps mine and place steps in their original positions,
+    /// so the stored step index still names the same step.
+    #[test]
+    fn stored_plan_steps_restore_mine_and_place_in_order() {
+        let mut task = StoredCompanionTask {
+            command: "build".to_owned(),
+            state: COMPANION_TASK_RUNNING,
+            start_tick: 3,
+            deadline_ticks: 99,
+            ..StoredCompanionTask::default()
+        };
+        task.plan_steps = vec![
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_GO_TO,
+                x: 1,
+                y: 64,
+                z: 2,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_MINE,
+                x: 3,
+                y: 64,
+                z: 4,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_PLACE,
+                x: 5,
+                y: 64,
+                z: 6,
+                block: 2,
+                ..StoredPlanStep::default()
+            },
+            StoredPlanStep {
+                kind: COMPANION_PLAN_STEP_GO_TO,
+                x: 7,
+                y: 64,
+                z: 8,
+                ..StoredPlanStep::default()
+            },
+        ];
+        assert_eq!(
+            AuthorityState::stored_plan_steps(&task),
+            vec![
+                PlanStep::GoTo { x: 1, y: 64, z: 2 },
+                PlanStep::Mine { x: 3, y: 64, z: 4 },
+                PlanStep::Place {
+                    x: 5,
+                    y: 64,
+                    z: 6,
+                    block: PlanBlock::Stone,
+                },
+                PlanStep::GoTo { x: 7, y: 64, z: 8 },
+            ]
+        );
+    }
+
+    /// A restored mine-only task has no executor in this slice, but its
+    /// deadline still expires it exactly at the deadline tick.
+    #[test]
+    fn restored_mine_only_task_still_times_out() {
+        let mut a = fresh();
+        let (id, name) = amu();
+        let actor = companion_actor(id);
+        let raw = mornlea_storage::PlayerId::from_bytes(id.bytes());
+        let loaded = mornlea_storage::StoredCompanions {
+            source_schema: 5,
+            revision: 1,
+            agent_namespace_id: raw,
+            records: vec![match &actor.body {
+                ActorBody::Companion(body) => body.clone(),
+                _ => unreachable!(),
+            }],
+            lifecycles: vec![mornlea_storage::StoredCompanionLifecycle {
+                id: raw,
+                active: true,
+                memory_epoch: 1,
+                memory_revision: 0,
+                memory_operation_id: Default::default(),
+                summary: String::new(),
+                tombstone_operation_id: Default::default(),
+            }],
+            queues: vec![mornlea_storage::StoredCompanionQueue {
+                id: raw,
+                has_current: true,
+                current: StoredCompanionTask {
+                    command: "mine".to_owned(),
+                    state: COMPANION_TASK_RUNNING,
+                    plan_steps: vec![StoredPlanStep {
+                        kind: COMPANION_PLAN_STEP_MINE,
+                        x: 9,
+                        y: 65,
+                        z: 8,
+                        ..StoredPlanStep::default()
+                    }],
+                    start_tick: 7,
+                    deadline_ticks: 50,
+                    ..StoredCompanionTask::default()
+                },
+                pending: Vec::new(),
+                summary: String::new(),
+            }],
+        };
+        let (book, tasks) =
+            CompanionChatBook::from_persisted(&[(id, name)], &loaded).unwrap();
+        a.companion_chat = book;
+        a.residents.actors.push(actor);
+        let mut runtime = companion_runtime(id);
+        if let ActorAux::Companion {
+            generation, task, ..
+        } = &mut runtime.aux
+        {
+            *generation = tasks[&id].0;
+            *task = tasks[&id].1.clone();
+        }
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), runtime);
+        a.metadata.world_time_ticks = 50;
+        let output = a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(output.actions.is_empty());
+        assert!(a.companion_chat_queue(id).unwrap().current.is_none());
+        let stored = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(stored.state, COMPANION_TASK_TIMED_OUT);
     }
 
     /// Preparing at the extreme tick captures that exact source tick with
