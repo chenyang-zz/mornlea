@@ -12,6 +12,7 @@ pub mod chunk_retirement;
 pub mod command_outcome;
 pub mod companion_chat;
 pub mod companion_ingress;
+pub mod companion_runner;
 mod container_store;
 pub mod contracts;
 mod deferred_commands;
