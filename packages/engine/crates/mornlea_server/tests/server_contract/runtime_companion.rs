@@ -8,7 +8,6 @@
 //! namespace lease runs on its own control worker, so a refused acquire never
 //! blocks startup or a tick.
 
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -26,8 +25,7 @@ use mornlea_server::contracts::*;
 use mornlea_server::core::{chunk_driver::ChunkDriver, generation_worker::GenerationPool};
 use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
-    CompanionRuntime, CompanionStartError, CompanionStartWarning, CompanionStartupPorts,
-    SystemClock, start_companions,
+    CompanionRuntime, CompanionStartError, CompanionStartupPorts, SystemClock, start_companions,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -290,25 +288,18 @@ fn start(
     state: &mut AuthorityState,
     ids: &mut Identities,
 ) -> Result<Option<CompanionRuntime>, CompanionStartError> {
-    let (result, warnings) = start_logged(config, disk, state, ids);
-    assert_eq!(warnings, Vec::new(), "no startup warning expected");
-    result
+    start_with_disk(config, disk, state, ids)
 }
 
-/// Runs startup and returns every warning it reported.
-fn start_logged(
+/// Runs startup against any disk backend, including write-counting doubles.
+fn start_with_disk(
     config: &RuntimeConfig,
-    disk: &mut DiskStore,
+    disk: &mut dyn DiskBackend,
     state: &mut AuthorityState,
     ids: &mut Identities,
-) -> (
-    Result<Option<CompanionRuntime>, CompanionStartError>,
-    Vec<CompanionStartWarning>,
-) {
-    let warnings = RefCell::new(Vec::new());
-    let sink = |warning: &CompanionStartWarning| warnings.borrow_mut().push(warning.clone());
+) -> Result<Option<CompanionRuntime>, CompanionStartError> {
     let mut mint = || ids.mint();
-    let result = start_companions(
+    start_companions(
         config.ai(),
         disk,
         state,
@@ -316,10 +307,33 @@ fn start_logged(
             clock: Arc::new(SystemClock),
             credential: &credential,
             identity: &mut mint,
-            warn: &sink,
         },
-    );
-    (result, warnings.into_inner())
+    )
+}
+
+/// Delegates to a real `DiskStore` while counting every backend write.
+struct WriteCountingDisk<'a> {
+    inner: &'a mut DiskStore,
+    writes: usize,
+}
+
+impl DiskBackend for WriteCountingDisk<'_> {
+    fn write(&mut self, ticket: SaveTicket, request: SaveRequest) -> SaveCompletion {
+        self.writes += 1;
+        self.inner.write(ticket, request)
+    }
+
+    fn load(&mut self, key: SaveKey) -> Result<LoadedValue, ServerError> {
+        self.inner.load(key)
+    }
+
+    fn sync(&mut self) -> Result<(), ServerError> {
+        self.inner.sync()
+    }
+
+    fn close(&mut self) -> Result<(), ServerError> {
+        self.inner.close()
+    }
 }
 
 fn deadline() -> Deadline {
@@ -761,7 +775,6 @@ fn missing_credential_refuses_before_save_io() {
             clock: Arc::new(SystemClock),
             credential: &|_| None,
             identity: &mut mint,
-            warn: &|warning| panic!("unexpected warning {warning}"),
         },
     )
     .err()
@@ -989,13 +1002,13 @@ fn unusable_go_endpoints_take_the_lease_failure_path() {
     );
 }
 
-/// Go places configured companions at the metadata spawn dimension; core
-/// has no non-Overworld companion yet, so a non-Overworld spawn defers them
-/// like a missing definition: the stored aggregate keeps every record with
-/// its bytes unchanged, nothing spawns or starts, no identity is minted,
-/// the world keeps ticking, and one typed warning names the companions.
+/// Go `bootstrapCompanionPersistence` builds configured bodies at the
+/// metadata spawn dimension and `MergeCompanionsV5` validation refuses a
+/// body outside the Overworld, so configured startup stops before any
+/// merge, save, Agent start, or identity mint: the stored aggregate keeps
+/// its bytes, no backend write happens, and nothing spawns.
 #[test]
-fn non_overworld_spawn_keeps_saved_companions_without_spawning() {
+fn non_overworld_spawn_refuses_configured_startup_without_write() {
     let root = Root::new();
     let mut disk = open_world_in(&root, 1);
     let aggregate = seeded(&[body(1, 8.5), body(2, 9.5)], &[]);
@@ -1003,26 +1016,28 @@ fn non_overworld_spawn_keeps_saved_companions_without_spawning() {
     let before = fs::read(root.companions_file()).unwrap();
     let mut state = authority(&disk);
     let mut ids = Identities::new();
-    let (result, warnings) = start_logged(
-        &config(&[(1, "Mira"), (2, "Tove")], &dead_endpoint()),
-        &mut disk,
-        &mut state,
-        &mut ids,
-    );
-    assert!(result.expect("startup continues").is_none());
-    assert_eq!(
-        warnings,
-        vec![CompanionStartWarning::NonOverworldSpawn {
-            dimension: 1,
-            companions: vec![companion(1), companion(2)],
-        }]
-    );
+    {
+        let mut counting = WriteCountingDisk {
+            inner: &mut disk,
+            writes: 0,
+        };
+        let error = start_with_disk(
+            &config(&[(1, "Mira"), (2, "Tove")], &dead_endpoint()),
+            &mut counting,
+            &mut state,
+            &mut ids,
+        )
+        .err()
+        .expect("configured non-Overworld spawn refuses startup");
+        assert_eq!(
+            error,
+            CompanionStartError::NonOverworldSpawn { dimension: 1 }
+        );
+        assert_eq!(counting.writes, 0);
+    }
     assert_eq!(fs::read(root.companions_file()).unwrap(), before);
     assert_eq!(ids.calls, 0);
     assert!(!state.companion_persistence_enabled());
-    for _ in 0..3 {
-        state.advance_tick(TickBudget::full()).unwrap();
-    }
     assert!(companion_lifecycles(&state).is_empty());
     disk.close().unwrap();
     assert_eq!(fs::read(root.companions_file()).unwrap(), before);
@@ -1031,21 +1046,110 @@ fn non_overworld_spawn_keeps_saved_companions_without_spawning() {
     let fresh = Root::new();
     let mut disk = open_world_in(&fresh, 1);
     let mut state = authority(&disk);
-    let (result, warnings) = start_logged(
-        &config(&[(3, "Ivo")], &dead_endpoint()),
+    {
+        let mut counting = WriteCountingDisk {
+            inner: &mut disk,
+            writes: 0,
+        };
+        let error = start_with_disk(
+            &config(&[(3, "Ivo")], &dead_endpoint()),
+            &mut counting,
+            &mut state,
+            &mut ids,
+        )
+        .err()
+        .expect("fresh configured non-Overworld spawn refuses startup");
+        assert_eq!(
+            error,
+            CompanionStartError::NonOverworldSpawn { dimension: 1 }
+        );
+        assert_eq!(counting.writes, 0);
+    }
+    assert!(!fresh.companions_file().exists());
+    assert_eq!(ids.calls, 0);
+    assert!(!state.companion_persistence_enabled());
+    disk.close().unwrap();
+}
+
+/// Go builds no active bodies when nothing is configured, so a
+/// non-Overworld spawn alone never refuses the unconfigured path: an
+/// existing aggregate is still retired exactly as in the Overworld.
+#[test]
+fn unconfigured_non_overworld_spawn_still_retires_without_refusal() {
+    let root = Root::new();
+    let mut disk = open_world_in(&root, 1);
+    let stored = body(1, 4.5);
+    let aggregate = seeded(std::slice::from_ref(&stored), &[]);
+    write(&mut disk, SaveValue::Companions(as_save(aggregate.clone())));
+    let mut state = authority(&disk);
+    let mut ids = Identities::new();
+    assert!(
+        start(&RuntimeConfig::defaults(), &mut disk, &mut state, &mut ids)
+            .unwrap()
+            .is_none()
+    );
+    let retired = load(&mut disk);
+    assert_eq!(retired.revision, aggregate.revision + 1);
+    assert_eq!(retired.records, vec![stored]);
+    assert_eq!(retired.lifecycles.len(), 1);
+    assert!(!retired.lifecycles[0].active);
+    assert!(retired.lifecycles[0].tombstone_operation_id.is_valid());
+    assert!(!state.companion_persistence_enabled());
+    disk.close().unwrap();
+}
+
+/// The dimension refusal follows the same order as Go: the credential
+/// check and the aggregate load still come first, so a missing credential
+/// or an unreadable aggregate reports its own error even when the spawn
+/// dimension is outside the Overworld.
+#[test]
+fn non_overworld_spawn_keeps_credential_and_load_order() {
+    let root = Root::new();
+    let mut disk = open_world_in(&root, 1);
+    let mut state = authority(&disk);
+    let mut mint = || -> Result<[u8; 16], ServerError> { panic!("no identity before credential") };
+    let error = start_companions(
+        config(&[(1, "Mira")], &dead_endpoint()).ai(),
+        &mut disk,
+        &mut state,
+        CompanionStartupPorts {
+            clock: Arc::new(SystemClock),
+            credential: &|_| None,
+            identity: &mut mint,
+        },
+    )
+    .err()
+    .expect("empty credential refuses before the dimension check");
+    assert_eq!(error, CompanionStartError::MissingCredential);
+    disk.close().unwrap();
+
+    let root = Root::new();
+    let mut disk = open_world_in(&root, 1);
+    write(
+        &mut disk,
+        SaveValue::Companions(as_save(seeded(&[body(1, 8.5)], &[]))),
+    );
+    let mut bytes = fs::read(root.companions_file()).unwrap();
+    *bytes.last_mut().unwrap() ^= 0xff;
+    fs::write(root.companions_file(), &bytes).unwrap();
+    let mut state = authority(&disk);
+    let mut ids = Identities::new();
+    let error = start(
+        &config(&[(1, "Mira")], &dead_endpoint()),
         &mut disk,
         &mut state,
         &mut ids,
-    );
-    assert!(result.expect("startup continues").is_none());
+    )
+    .err()
+    .expect("unreadable aggregate refuses before the dimension check");
     assert_eq!(
-        warnings,
-        vec![CompanionStartWarning::NonOverworldSpawn {
-            dimension: 1,
-            companions: vec![companion(3)],
-        }]
+        error,
+        CompanionStartError::Load(ServerError::Storage {
+            family: "companions",
+            kind: StorageFailure::Corrupt,
+        })
     );
-    assert!(!fresh.companions_file().exists());
+    assert_eq!(fs::read(root.companions_file()).unwrap(), bytes);
     assert_eq!(ids.calls, 0);
     disk.close().unwrap();
 }

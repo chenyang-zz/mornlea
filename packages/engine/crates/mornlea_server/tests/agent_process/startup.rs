@@ -13,7 +13,7 @@ use mornlea_server::agent::lease::ControlPhase;
 use mornlea_server::contracts::{Deadline, DiskBackend, ServerError, ServerLimits};
 use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
-    CompanionStartWarning, CompanionStartupPorts, SystemClock, start_companions, system_identity,
+    CompanionStartupPorts, SystemClock, start_companions, system_identity,
 };
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -97,7 +97,6 @@ fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
     .expect("config decodes");
     let credential = |_: &str| Some(token.to_owned());
     let mut identity = || -> Result<[u8; 16], ServerError> { system_identity() };
-    let warn = |warning: &CompanionStartWarning| panic!("{endpoint}: unexpected warning {warning}");
     let mut runtime = start_companions(
         config.ai(),
         &mut disk,
@@ -106,7 +105,6 @@ fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
             clock: Arc::new(SystemClock),
             credential: &credential,
             identity: &mut identity,
-            warn: &warn,
         },
     )
     .expect("startup succeeds")
