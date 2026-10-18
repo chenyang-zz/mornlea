@@ -72,7 +72,7 @@ use crate::core::contracts::{
     ServerError, SessionKey, SystemRule,
 };
 use crate::core::state::{AuthorityReadView, TickContext};
-use crate::rules::environment::year_phase_at;
+use crate::rules::environment::effective_day_phase_at;
 
 // -- Frozen numeric contract (`passive.go`, `passive_spawn.go`,
 // `passive_tempt.go`, `passive_graze.go`, `packages/server/updates/sampler.go`).
@@ -2181,54 +2181,6 @@ fn spawn_column(base: u64, anchor_x: i32, anchor_z: i32) -> (i32, i32) {
     (
         anchor_x + (dx * radius) as i32,
         anchor_z + (dz * radius) as i32,
-    )
-}
-
-/// Display phase of the absolute clock plus the display offset
-/// (`DisplayDayPhase`, `packages/shared/core/day_phase.go`): modulo before the
-/// add so any absolute time stays overflow-free.
-fn display_day_phase(world_time: u64, offset: u16) -> u16 {
-    ((world_time % 24000 + u64::from(offset)) % 24000) as u16
-}
-
-/// Day-arc ratio of a year phase (`DayFractionAt`): 0.5 + 0.15*sin(2pi*p).
-fn day_fraction_at(year_phase: f64) -> f64 {
-    0.5 + 0.15 * (2.0 * std::f64::consts::PI * year_phase).sin()
-}
-
-/// Day arc in ticks (`DayArcTicks`): rounded, then forced even so the warp
-/// divisions stay symmetric across both branches.
-fn day_arc_ticks(year_phase: f64) -> u16 {
-    let mut ticks = (day_fraction_at(year_phase) * 24000.0).round() as i64;
-    if ticks % 2 == 1 {
-        ticks -= 1;
-    }
-    ticks as u16
-}
-
-/// Seasonal display phase (`EffectiveDayPhase`): the day arc maps linearly
-/// onto the half period; an invalid arc returns zero by contract.
-fn effective_day_phase(world_time: u64, offset: u16, day_arc: u16) -> u16 {
-    if day_arc == 0 || day_arc > 24000 || !day_arc.is_multiple_of(2) {
-        return 0;
-    }
-    let phase = u32::from(display_day_phase(world_time, offset));
-    let arc = u32::from(day_arc);
-    if phase < arc {
-        (phase * 12000 / arc) as u16
-    } else {
-        (12000 + (phase - arc) * 12000 / (24000 - arc)) as u16
-    }
-}
-
-/// The only day-phase path (`EffectiveDayPhaseAt`): season offset to year
-/// phase to day arc to the warped phase. Consumers must not assemble their own
-/// warp.
-fn effective_day_phase_at(world_time: u64, offset: u16, season_offset: u32) -> u16 {
-    effective_day_phase(
-        world_time,
-        offset,
-        day_arc_ticks(year_phase_at(world_time, season_offset)),
     )
 }
 
