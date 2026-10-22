@@ -384,7 +384,7 @@ impl CompanionPlanLoop {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap as Map;
     use std::time::Instant;
@@ -404,11 +404,11 @@ mod tests {
     };
 
     /// The frozen timeout every loop in these tests is built with.
-    fn timeout() -> TaskTimeoutMinutes {
+    pub(crate) fn timeout() -> TaskTimeoutMinutes {
         TaskTimeoutMinutes::try_new(7).unwrap()
     }
 
-    fn uuid(tag: u8) -> [u8; 16] {
+    pub(crate) fn uuid(tag: u8) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[0] = tag;
         bytes[6] = 0x40;
@@ -416,7 +416,7 @@ mod tests {
         bytes
     }
 
-    struct TestClock(Instant);
+    pub(crate) struct TestClock(Instant);
     impl Clock for TestClock {
         fn monotonic(&self) -> Instant {
             self.0
@@ -427,13 +427,13 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeAgent {
+    pub(crate) struct FakeAgent {
         submitted: Vec<AgentRequest>,
         terminals: Map<AgentRequestId, AgentPoll>,
     }
 
     impl FakeAgent {
-        fn plan_requests(&self) -> Vec<crate::contracts::PlanRequest> {
+        pub(crate) fn plan_requests(&self) -> Vec<crate::contracts::PlanRequest> {
             self.submitted
                 .iter()
                 .filter_map(|request| match request {
@@ -442,7 +442,7 @@ mod tests {
                 })
                 .collect()
         }
-        fn complete(
+        pub(crate) fn complete(
             &mut self,
             request: &crate::contracts::PlanRequest,
             plan: crate::contracts::AgentPlan,
@@ -510,16 +510,20 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeSnapshots;
+    pub(crate) struct FakeSnapshots {
+        /// Source tick of every registered planning snapshot, in order.
+        pub(crate) source_ticks: Vec<u64>,
+    }
     impl SnapshotPort for FakeSnapshots {
         fn register(
             &mut self,
             _namespace: NamespaceId,
             _companion: CompanionId,
             _generation: u64,
-            _snapshot: crate::contracts::PlanningSnapshot,
+            snapshot: crate::contracts::PlanningSnapshot,
             _deadline: crate::contracts::Deadline,
         ) -> Result<SnapshotRegistration, ServerError> {
+            self.source_ticks.push(snapshot.source_tick());
             SnapshotRegistration::try_new(
                 SnapshotId::try_from_bytes(uuid(90)).unwrap(),
                 [3u8; 32],
@@ -538,7 +542,7 @@ mod tests {
         }
     }
 
-    struct Rig {
+    pub(crate) struct Rig {
         agent: FakeAgent,
         snapshots: FakeSnapshots,
         clock: TestClock,
@@ -546,13 +550,45 @@ mod tests {
     }
 
     impl Rig {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 agent: FakeAgent::default(),
-                snapshots: FakeSnapshots,
+                snapshots: FakeSnapshots::default(),
                 clock: TestClock(Instant::now()),
                 mint_tag: 100,
             }
+        }
+
+        /// Lends one ports value to `run`; minted identities keep
+        /// advancing across calls so no two requests share an id.
+        pub(crate) fn with_ports<R>(
+            &mut self,
+            run: impl FnOnce(CompanionPlanningPorts<'_>) -> R,
+        ) -> R {
+            let tag = &mut self.mint_tag;
+            let mut mint = || {
+                *tag = tag.wrapping_add(1);
+                Ok(uuid(*tag))
+            };
+            run(CompanionPlanningPorts {
+                agent: &mut self.agent,
+                snapshots: &mut self.snapshots,
+                clock: &self.clock,
+                client: crate::contracts::ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+                namespace: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+                lease: Some((Lease::try_from_bytes(uuid(30)).unwrap(), 9)),
+                mint_id: &mut mint,
+            })
+        }
+
+        /// The fake snapshot registry, to inspect registrations.
+        pub(crate) fn snapshots(&self) -> &FakeSnapshots {
+            &self.snapshots
+        }
+
+        /// The fake Agent, to answer or inspect requests.
+        pub(crate) fn agent(&mut self) -> &mut FakeAgent {
+            &mut self.agent
         }
     }
 
@@ -586,7 +622,7 @@ mod tests {
         report
     }
 
-    fn queued_fixture() -> (
+    pub(crate) fn queued_fixture() -> (
         crate::core::state::companion_planning::tests::PlanningFixture,
         CompanionId,
     ) {
@@ -595,7 +631,7 @@ mod tests {
         (fixture, id)
     }
 
-    fn go_home_plan() -> crate::contracts::AgentPlan {
+    pub(crate) fn go_home_plan() -> crate::contracts::AgentPlan {
         crate::contracts::AgentPlan::try_new(
             "go".to_owned(),
             vec![PlanStep::GoTo {

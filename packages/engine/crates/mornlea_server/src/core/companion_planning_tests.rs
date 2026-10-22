@@ -917,3 +917,22 @@ pub(crate) fn clear_companion_inventory(authority: &mut AuthorityState, id: Comp
         .expect("companion inventory")
         .slots = [ItemStack::default(); 36];
 }
+
+/// Gives every player actor an empty inventory, which a whole authority
+/// tick requires and the planning fixtures do not carry.
+pub(crate) fn give_players_inventories(authority: &mut AuthorityState) {
+    let players: Vec<ActorKey> = authority
+        .residents
+        .actors
+        .iter()
+        .filter(|actor| matches!(actor.key, ActorKey::Player(_)))
+        .map(|actor| actor.key)
+        .collect();
+    for key in players {
+        authority
+            .residents
+            .inventories
+            .entry(key)
+            .or_insert_with(InventoryRecord::empty);
+    }
+}
