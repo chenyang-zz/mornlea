@@ -1454,3 +1454,128 @@ func TestCompanionManagerIdleSlotNoMismatchLog(t *testing.T) {
 			idleTicks, count)
 	}
 }
+
+// identityMismatchPlanner wraps the typed planner seam and corrupts the bridge
+// identity echo of the first `remaining` successful plans for one companion,
+// leaving the local generation and attempt intact.
+type identityMismatchPlanner struct {
+	inner     companionPlanner
+	target    companion.ID
+	mu        sync.Mutex
+	remaining int
+}
+
+func (p *identityMismatchPlanner) Plan(
+	ctx context.Context,
+	request companionPlanningRequest,
+) (companionPlanningOutcome, error) {
+	outcome, err := p.inner.Plan(ctx, request)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err == nil && request.CompanionID == p.target && p.remaining > 0 {
+		p.remaining--
+		outcome.SnapshotID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	}
+	return outcome, err
+}
+
+// TestCompanionManagerIdentityMismatchFailsOnlyCurrentTaskAndAdvancesFIFO drives
+// the real tick loop: one companion's plan comes back with a mismatched bridge
+// identity while a second companion plans concurrently. The mismatched task must
+// end as TaskFailed(PlannerUnavailable), the planning gate must be released so
+// the next queued command dispatches on a later tick, and the other companion
+// must be untouched.
+func TestCompanionManagerIdentityMismatchFailsOnlyCurrentTaskAndAdvancesFIFO(t *testing.T) {
+	definitions := []companion.Definition{
+		{ID: chatTestCompanionID(1), Name: "阿木"},
+		{ID: chatTestCompanionID(2), Name: "小石"},
+	}
+	model := newFakeCompanionModel(t)
+	host := newCompanionManagerHost(t, definitions, model, nil)
+	client := openCompanionChatClient(t, host, "memory", integrationIdentity(0x75, "发令者"))
+	waitForCompanionChatWorld(t, host, []network.ClientEndpoint{client}, len(definitions))
+	body := currentCompanionBody(t, host, definitions[0].ID)
+	model.mu.Lock()
+	model.steps = [][3]int32{{int32(body.Position[0]) + 1, 1, int32(body.Position[2])}}
+	model.mu.Unlock()
+	planner := &identityMismatchPlanner{
+		inner: fakeCompanionPlanner{model: model}, target: definitions[0].ID, remaining: 1,
+	}
+	host.world.stepMu.Lock()
+	host.world.companionManager.planner = planner
+	host.world.stepMu.Unlock()
+	model.holdRequests()
+
+	for _, text := range []string{"@阿木 第一", "@阿木 第二", "@小石 出发"} {
+		sendIntegration(t, client, network.ChatCommand{Text: text})
+	}
+	waitForIncomingChatDepth(t, host.world, 3)
+	result := host.world.StepForTest()
+	events := companionChatEvents(receiveCompanionChatTick(t, client, result.Tick))
+	// Both companions are planning at the same time before any result lands.
+	waitForModelRequests(t, model, 2)
+	model.releaseRequests()
+
+	isEvent := func(event network.ChatEvent, id companion.ID, command string, kind network.ChatEventKind) bool {
+		return event.CompanionID == id && event.Command == command && event.Kind == kind
+	}
+	seen := func(events []network.ChatEvent, id companion.ID, command string, kind network.ChatEventKind) bool {
+		return slices.ContainsFunc(events, func(event network.ChatEvent) bool {
+			return isEvent(event, id, command, kind)
+		})
+	}
+	events = append(events, stepUntilCompanionEvents(t, host, []network.ClientEndpoint{client},
+		func(events []network.ChatEvent) bool {
+			return seen(events, definitions[0].ID, "第一", network.ChatEventTaskFailed) &&
+				seen(events, definitions[0].ID, "第二", network.ChatEventTaskStarted) &&
+				seen(events, definitions[1].ID, "出发", network.ChatEventTaskStarted)
+		})...)
+
+	host.world.stepMu.Lock()
+	inFlight := host.world.companionManager.slots[definitions[0].ID].planningInFlight
+	host.world.stepMu.Unlock()
+	requests, _, _, _ := model.snapshotCounts()
+	if !seen(events, definitions[0].ID, "第一", network.ChatEventTaskFailed) {
+		t.Fatalf("identity-mismatched task never reached a terminal state (planningInFlight=%v requests=%d events=%v)",
+			inFlight, requests, chatEventKinds(events))
+	}
+	if !seen(events, definitions[0].ID, "第二", network.ChatEventTaskStarted) {
+		t.Fatalf("next FIFO command never dispatched (planningInFlight=%v requests=%d events=%v)",
+			inFlight, requests, chatEventKinds(events))
+	}
+	if !seen(events, definitions[1].ID, "出发", network.ChatEventTaskStarted) {
+		t.Fatalf("concurrent companion did not start its task: %v", chatEventKinds(events))
+	}
+	if requests != 3 {
+		t.Fatalf("model requests=%d, want 3 (one per command, no retry of the failed task)", requests)
+	}
+
+	var failedIndex, secondStartedIndex int
+	for index, event := range events {
+		if event.CompanionID == definitions[1].ID && event.Kind == network.ChatEventTaskFailed {
+			t.Fatalf("concurrent companion task failed: %+v", event)
+		}
+		if event.CompanionID == definitions[0].ID && event.Kind == network.ChatEventTaskFailed {
+			if event.Command != "第一" {
+				t.Fatalf("unexpected failure for %q: %+v", event.Command, event)
+			}
+			if event.RejectReason != network.ChatRejectReason(network.TaskFailPlannerUnavailable) {
+				t.Fatalf("terminal reason=%v, want PlannerUnavailable", event.RejectReason)
+			}
+			if event.PlayerID != integrationIdentity(0x75, "发令者").PlayerID || event.CompanionName != "阿木" {
+				t.Fatalf("terminal event identity incomplete: %+v", event)
+			}
+			if err := event.Validate(); err != nil {
+				t.Fatalf("terminal event Validate: %v", err)
+			}
+			failedIndex = index
+		}
+		if isEvent(event, definitions[0].ID, "第二", network.ChatEventTaskStarted) {
+			secondStartedIndex = index
+		}
+	}
+	if secondStartedIndex <= failedIndex {
+		t.Fatalf("next command started before the failed task terminated: %v", chatEventKinds(events))
+	}
+	assertStrictlyIncreasingEventIDs(t, events)
+}

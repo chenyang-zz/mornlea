@@ -14,6 +14,7 @@ func TestCompanionPlannerUnmatchedOutcomeDoesNotClearActiveGate(t *testing.T) {
 		manager.applyPlannerOutcome(outcome)
 		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
 		assertRepairPlanningState(t, slot)
+		assertRepairNoTaskEvents(t, manager)
 	})
 
 	t.Run("stale attempt", func(t *testing.T) {
@@ -23,6 +24,7 @@ func TestCompanionPlannerUnmatchedOutcomeDoesNotClearActiveGate(t *testing.T) {
 		manager.applyPlannerOutcome(outcome)
 		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
 		assertRepairPlanningState(t, slot)
+		assertRepairNoTaskEvents(t, manager)
 	})
 
 	t.Run("terminal state", func(t *testing.T) {
@@ -34,46 +36,49 @@ func TestCompanionPlannerUnmatchedOutcomeDoesNotClearActiveGate(t *testing.T) {
 		if _, ok := slot.queue.Current(); ok {
 			t.Fatal("terminal state changed by stale outcome")
 		}
+		assertRepairNoTaskEvents(t, manager)
 	})
+}
 
+// An outcome whose local generation and attempt match the in-flight dispatch
+// but whose bridge identity echo does not validate is the only reply that
+// dispatch will ever get. It must release the planning gate and fail only the
+// current task as PlannerUnavailable instead of wedging the companion.
+func TestCompanionPlannerIdentityMismatchFailsTaskAndClearsGate(t *testing.T) {
 	t.Run("empty bridge identity", func(t *testing.T) {
-		host, definition, manager, outcome := repairPlanningOutcome(t)
+		_, definition, manager, outcome := repairPlanningOutcome(t)
 		slot := manager.slots[definition.ID]
 		outcome.result.RunID = ""
 		outcome.result.SnapshotID = ""
 		outcome.result.SnapshotDigest = ""
 		manager.applyPlannerOutcome(outcome)
-		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
-		assertRepairPlanningState(t, slot)
+		assertRepairIdentityMismatchFailed(t, manager, slot)
 	})
 
 	t.Run("mismatched snapshot digest", func(t *testing.T) {
-		host, definition, manager, outcome := repairPlanningOutcome(t)
+		_, definition, manager, outcome := repairPlanningOutcome(t)
 		slot := manager.slots[definition.ID]
 		outcome.result.RunID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 		outcome.result.SnapshotID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 		outcome.result.SnapshotDigest = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 		manager.applyPlannerOutcome(outcome)
-		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
-		assertRepairPlanningState(t, slot)
+		assertRepairIdentityMismatchFailed(t, manager, slot)
 	})
 
 	t.Run("mismatched snapshot id", func(t *testing.T) {
-		host, definition, manager, outcome := repairPlanningOutcome(t)
+		_, definition, manager, outcome := repairPlanningOutcome(t)
 		slot := manager.slots[definition.ID]
 		outcome.result.SnapshotID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 		manager.applyPlannerOutcome(outcome)
-		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
-		assertRepairPlanningState(t, slot)
+		assertRepairIdentityMismatchFailed(t, manager, slot)
 	})
 
 	t.Run("mismatched result attempt", func(t *testing.T) {
-		host, definition, manager, outcome := repairPlanningOutcome(t)
+		_, definition, manager, outcome := repairPlanningOutcome(t)
 		slot := manager.slots[definition.ID]
 		outcome.result.Attempt++
 		manager.applyPlannerOutcome(outcome)
-		assertRepairPlanningGateHeld(t, host, manager, slot, definition.ID)
-		assertRepairPlanningState(t, slot)
+		assertRepairIdentityMismatchFailed(t, manager, slot)
 	})
 }
 
@@ -120,5 +125,32 @@ func assertRepairPlanningState(t *testing.T, slot *companionTaskSlot) {
 	current, ok := slot.queue.Current()
 	if !ok || current.State != companion.TaskPlanning {
 		t.Fatalf("current=%+v ok=%v，want Planning unchanged", current, ok)
+	}
+}
+
+func assertRepairNoTaskEvents(t *testing.T, manager *companionManager) {
+	t.Helper()
+	if facts := manager.takeEventFacts(); len(facts) != 0 {
+		t.Fatalf("stale outcome produced task events: %+v", facts)
+	}
+}
+
+func assertRepairIdentityMismatchFailed(
+	t *testing.T,
+	manager *companionManager,
+	slot *companionTaskSlot,
+) {
+	t.Helper()
+	if slot.planningInFlight {
+		t.Fatal("identity-mismatched outcome left the planning gate set")
+	}
+	if current, ok := slot.queue.Current(); ok {
+		t.Fatalf("current=%+v, want the task terminal and the slot cleared", current)
+	}
+	facts := manager.takeEventFacts()
+	if len(facts) != 1 || facts[0].event.Kind != companion.TaskEventFailed ||
+		facts[0].event.Reason != companion.TaskFailPlannerUnavailable ||
+		facts[0].command != companion.TaskCommand("执行计划") {
+		t.Fatalf("facts=%+v, want one TaskFailed(PlannerUnavailable) for the current command", facts)
 	}
 }
