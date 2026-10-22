@@ -1490,4 +1490,119 @@ mod interaction_tests {
             BlockPos::new(11, 0, 8)
         );
     }
+
+    #[test]
+    fn upper_layer_wins_over_lower_when_the_same_layer_is_blocked() {
+        // -X column: solid up to y=0, so (9,1,8) stands one layer up.
+        // +X column: solid only at y=-2, so (11,-1,8) stands one layer down.
+        // -Z and +Z columns are solid throughout. No same-layer cell stands
+        // (-X feet solid, +X has no support), so Go picks dy=+1 before dy=-1.
+        let world = |pos: BlockPos| -> Option<u16> {
+            match (pos.x(), pos.z()) {
+                (9, 8) => Some(if pos.y() <= 0 { 2 } else { 0 }),
+                (11, 8) => Some(if pos.y() == -2 { 2 } else { 0 }),
+                (10, 7) | (10, 9) => Some(2),
+                _ => Some(if pos.y() < -2 { 2 } else { 0 }),
+            }
+        };
+        assert_eq!(
+            interaction_goal(target_pos(), world),
+            BlockPos::new(9, 1, 8)
+        );
+    }
+
+    /// Observes `first`, then `second`, as consecutive mining ticks.
+    fn mine_twice(first: (u32, u32), second: (u32, u32)) -> Vec<RunnerEffect> {
+        let steps = vec![mine()];
+        let mut runner = TaskRunner::installed(1, 0);
+        approached(&steps, &mut runner);
+        let mut seen = sight(Some(3));
+        seen.mining = mining(first.0, first.1);
+        let _ = runner.on_tick(&steps, &observed(3, AT_GOAL, seen));
+        let mut next = sight(Some(3));
+        next.mining = mining(second.0, second.1);
+        runner.on_tick(&steps, &observed(4, AT_GOAL, next))
+    }
+
+    #[test]
+    fn changed_required_ticks_fail_world_changed_without_regression() {
+        let world_changed = vec![RunnerEffect::Finish(TaskState::Failed(
+            TaskFailure::WorldChanged,
+        ))];
+        // Elapsed holds or grows, but the timing rule changed: another
+        // block/tool key now accumulates on the target.
+        assert_eq!(mine_twice((1, 30), (1, 5)), world_changed);
+        assert_eq!(mine_twice((1, 30), (2, 5)), world_changed);
+        // Same rule, growing progress: keep holding.
+        assert_eq!(
+            mine_twice((1, 30), (2, 30)),
+            vec![RunnerEffect::Interact(CompanionAction::MineHold {
+                target: target_pos()
+            })]
+        );
+    }
+
+    /// Observes progress `(elapsed, 5)`, then the target emptied with the
+    /// progress gone.
+    fn emptied_after(elapsed: u32) -> Vec<RunnerEffect> {
+        let steps = vec![mine()];
+        let mut runner = TaskRunner::installed(1, 0);
+        approached(&steps, &mut runner);
+        let mut seen = sight(Some(3));
+        seen.mining = mining(elapsed, 5);
+        let _ = runner.on_tick(&steps, &observed(3, AT_GOAL, seen));
+        runner.on_tick(&steps, &observed(4, AT_GOAL, sight(Some(0))))
+    }
+
+    #[test]
+    fn emptied_target_completes_only_one_tick_short_of_required() {
+        let world_changed = vec![RunnerEffect::Finish(TaskState::Failed(
+            TaskFailure::WorldChanged,
+        ))];
+        assert_eq!(emptied_after(2), world_changed);
+        assert_eq!(emptied_after(3), world_changed);
+        assert_eq!(
+            emptied_after(4),
+            vec![RunnerEffect::Finish(TaskState::Completed)]
+        );
+    }
+
+    #[test]
+    fn a_second_place_step_approaches_its_own_target_first() {
+        let second_goal = BlockPos::new(12, 0, 5);
+        let steps = vec![
+            place(),
+            PlanStep::Place {
+                x: 13,
+                y: 0,
+                z: 5,
+                block: PlanBlock::Dirt,
+            },
+        ];
+        let mut runner = TaskRunner::installed(1, 0);
+        approached(&steps, &mut runner);
+        assert_eq!(
+            runner.on_tick(&steps, &observed(3, AT_GOAL, sight(Some(0)))),
+            vec![RunnerEffect::Interact(CompanionAction::Place {
+                target: target_pos(),
+                block: 3
+            })]
+        );
+        assert_eq!(
+            runner.on_tick(&steps, &observed(4, AT_GOAL, sight(Some(3)))),
+            vec![RunnerEffect::StepProgress { step_index: 1 }]
+        );
+        // The second step starts from its own approach: no inherited
+        // in-position state, so it paths before any placement.
+        let mut next = sight(Some(0));
+        next.approach_goal = second_goal;
+        assert_eq!(
+            runner.on_tick(&steps, &observed(5, AT_GOAL, next)),
+            vec![RunnerEffect::RequestPath {
+                generation: 1,
+                goal: second_goal
+            }]
+        );
+        assert!(!runner.interaction_ready());
+    }
 }
