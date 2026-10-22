@@ -1349,25 +1349,96 @@ mod tests {
 
     /// Fluid budgets stay raw numbers here; the fluid host owns constructing
     /// `TickBudget`. The tick assembly only carries the budget it is handed.
+    ///
+    /// Runtime code may name the type but never reach a constructor: no
+    /// associated path, no renaming import or cast, and no type alias that
+    /// could reach one under another name. The type itself offers no other
+    /// way in, which the second half pins: private fields, and no `Default`,
+    /// `From` or `Deserialize` (no trait impl at all), so neither
+    /// `Default::default()` nor a conversion can produce one.
     #[test]
     fn runtime_never_constructs_tick_budget() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
         // Split so this test's own source does not match.
-        // The fields are private, so every construction goes through an
-        // associated constructor.
-        let needle = ["Tick", "Budget", "::"].concat();
+        let name = ["Tick", "Budget"].concat();
+        let associated = format!("{name}::");
+        let renamed = format!("{name} as ");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
         for entry in walkdir(&root) {
-            let text = fs::read_to_string(&entry).unwrap();
-            let code: String = text
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect();
+            let code = code_tokens(&fs::read_to_string(&entry).unwrap());
+            let file = entry.display();
             assert!(
-                !code.contains(&needle),
-                "{} must not construct the fluid tick budget",
+                !code.contains(&associated),
+                "{file} must not construct the fluid tick budget"
+            );
+            assert!(
+                !code.contains(&renamed),
+                "{file} must not rename the fluid tick budget"
+            );
+            for statement in code.split([';', '{', '}']) {
+                let Some(alias) = word_start(statement, "type ") else {
+                    continue;
+                };
+                let rest = &statement[alias..];
+                if let Some(eq) = rest.find('=') {
+                    assert!(
+                        !rest[eq..].contains(&name),
+                        "{file} must not alias the fluid tick budget"
+                    );
+                }
+            }
+        }
+
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let trait_impl = format!("for {name}");
+        for entry in walkdir(&src) {
+            let code = code_tokens(&fs::read_to_string(&entry).unwrap());
+            assert!(
+                !code.contains(&trait_impl),
+                "{} gives the fluid tick budget a trait impl",
                 entry.display()
             );
         }
+        let contracts = fs::read_to_string(src.join("core/contracts.rs")).unwrap();
+        let declaration = format!("pub struct {name} {{");
+        let lines: Vec<&str> = contracts.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.trim() == declaration)
+            .expect("the budget declaration");
+        let derive = lines[at - 1].trim();
+        assert!(derive.starts_with("#[derive("), "{derive}");
+        for forbidden in ["Default", "Deserialize"] {
+            assert!(!derive.contains(forbidden), "{derive}");
+        }
+        for field in lines[at + 1..].iter().take_while(|line| line.trim() != "}") {
+            assert!(!field.trim_start().starts_with("pub"), "{field}");
+        }
+    }
+
+    /// Source text without line comments, whitespace collapsed to single
+    /// spaces and none around `::`, so a line break or spacing cannot hide
+    /// a path from the guards above.
+    fn code_tokens(text: &str) -> String {
+        let code = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        code.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(" ::", "::")
+            .replace(":: ", "::")
+    }
+
+    /// Byte offset of `word` where it starts a token.
+    fn word_start(text: &str, word: &str) -> Option<usize> {
+        text.match_indices(word).map(|(at, _)| at).find(|&at| {
+            text[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
     }
 
     fn walkdir(root: &Path) -> Vec<PathBuf> {
