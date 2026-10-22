@@ -1528,7 +1528,7 @@ fn frozen_place_inventory_missing_is_invalid_plan() {
 /// Go install-time current-authority revalidation re-runs the place
 /// inventory check on the current snapshot (companion_manager.go:651-653
 /// via planner.go:282-284) and fails it as WorldChanged
-/// (companion_manager.go:590-592); with both inventories holding the item
+/// (companion_manager.go:586-588); with both inventories holding the item
 /// the plan installs.
 #[test]
 fn current_place_inventory_missing_is_world_changed() {

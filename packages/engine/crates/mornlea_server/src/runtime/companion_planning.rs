@@ -1236,7 +1236,7 @@ mod tests {
     #[test]
     fn plan_loop_current_place_inventory_fails_world_changed() {
         // Go install-time revalidation against the current snapshot
-        // (companion_manager.go:651-653) fails as WorldChanged (:590-592).
+        // (companion_manager.go:651-653) fails as WorldChanged (:586-588).
         let (mut fixture, id) = queued_fixture();
         let mut plan_loop = CompanionPlanLoop::new();
         let mut rig = Rig::new();
