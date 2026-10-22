@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use mornlea_domain::{BlockPos, ChunkPos, CompanionId};
+use mornlea_domain::{BlockPos, CompanionId};
 
 use super::memory::{CommitReservation, valid_dialogue_line, valid_memory_text};
 use crate::contracts::{
@@ -29,6 +29,7 @@ use crate::contracts::{
     ServerError, SnapshotId, SnapshotPort,
 };
 use crate::core::companion_ingress::CompanionTaskGate;
+use crate::core::plan_validation::{PlanCheckFailure, validate_plan_against_snapshots};
 
 pub use crate::contracts::CurrentWorld;
 
@@ -109,61 +110,6 @@ fn valid_line(value: &str) -> bool {
     value.len() <= MAX_LINE_BYTES && valid_dialogue_line(value)
 }
 
-/// Reports whether a block id is a planner-legal mine target.
-///
-/// The rule mirrors the Go `planMineableBlock`: crops, farmland, torches, and
-/// wild grass are explicitly refused, and every other block needs a single
-/// registered drop, so air, barrier, bedrock, fluids, snow layers, and any
-/// unregistered id stay refused.
-fn plan_mineable(block: u16) -> bool {
-    if (35..=36).contains(&block)
-        || (37..=44).contains(&block)
-        || (46..=53).contains(&block)
-        || (54..=61).contains(&block)
-        || (71..=75).contains(&block)
-        || block == 84
-    {
-        return false;
-    }
-    matches!(
-        block,
-        2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21
-            | 22 | 23 | 24 | 25 | 26 | 45 | 62..=70 | 76..=83 | 89
-    )
-}
-
-/// Maps a plan block to the item id the companion must hold.
-///
-/// The table mirrors the Go `planPlaceBlocks` reverse index over
-/// `ItemPlacement`: each placeable block names its placing item.
-fn plan_block_item(block: PlanBlock) -> u16 {
-    match block {
-        PlanBlock::Brick => 24,
-        PlanBlock::Chest => 14,
-        PlanBlock::Clay => 27,
-        PlanBlock::Cobblestone => 16,
-        PlanBlock::Dirt => 2,
-        PlanBlock::Furnace => 8,
-        PlanBlock::Glass => 23,
-        PlanBlock::Grass => 3,
-        PlanBlock::Gravel => 19,
-        PlanBlock::IronBlock => 9,
-        PlanBlock::Leaves => 22,
-        PlanBlock::LightBlock => 15,
-        PlanBlock::MossyCobblestone => 29,
-        PlanBlock::OakLog => 20,
-        PlanBlock::OakPlanks => 21,
-        PlanBlock::RoofTile => 26,
-        PlanBlock::Sand => 18,
-        PlanBlock::SmoothStone => 17,
-        PlanBlock::SnowBlock => 28,
-        PlanBlock::Stone => 1,
-        PlanBlock::StoneBrick => 4,
-        PlanBlock::WhiteWool => 25,
-        PlanBlock::Workbench => 38,
-    }
-}
-
 /// Maps a plan block to its protocol block id.
 ///
 /// The numbers are the Go `core` stable block ids in `block.go` declaration
@@ -194,33 +140,6 @@ fn plan_block_id(block: PlanBlock) -> u16 {
         PlanBlock::WhiteWool => 22,
         PlanBlock::Workbench => 45,
     }
-}
-
-/// Derives the chunk column of a block position with arithmetic shift,
-/// mirroring the Go `BlockPos.Chunk` rule for negative coordinates.
-fn target_chunk(target: BlockPos) -> ChunkPos {
-    ChunkPos::new(target.x() >> 4, target.z() >> 4)
-}
-
-/// Reads one dense terrain cell: the position must sit inside the frozen
-/// `[33, 17, 33]` projection and its column must be marked ready.
-fn terrain_lookup(
-    origin: BlockPos,
-    ready_columns: &[u8],
-    blocks: &[u16],
-    target: BlockPos,
-) -> Option<u16> {
-    let dx = target.x().checked_sub(origin.x())?;
-    let dy = target.y().checked_sub(origin.y())?;
-    let dz = target.z().checked_sub(origin.z())?;
-    if !(0..33).contains(&dx) || !(0..17).contains(&dy) || !(0..33).contains(&dz) {
-        return None;
-    }
-    let column = (dx * 33 + dz) as usize;
-    if ready_columns.get(column / 8)? & (1 << (column % 8)) == 0 {
-        return None;
-    }
-    blocks.get(((dx * 17 + dy) * 33 + dz) as usize).copied()
 }
 
 /// Plan dispatch frozen by the caller: the snapshot carries the instruction
@@ -1155,33 +1074,17 @@ impl PlanHost {
             });
             return;
         }
-        // Decode-time rules against the frozen snapshot come before any
-        // current-world read, exactly as the Go bridge decodes the plan
-        // before the outcome reaches the tick.
-        if validate_against_frozen(slot, &response.plan).is_err() {
+        // One core entry decides: frozen-snapshot (decode-time) rules first,
+        // then the current world; the host only maps the outcome.
+        if let Err(failure) = validate_plan_against_snapshots(&slot.frozen, &response.plan, world) {
             self.plans.remove(&companion);
             report.rejected.push(InstallRejection {
                 companion,
                 attempt,
-                reason: InstallReject::InvalidPlan,
-            });
-            return;
-        }
-        let Some(world) = world else {
-            self.plans.remove(&companion);
-            report.rejected.push(InstallRejection {
-                companion,
-                attempt,
-                reason: InstallReject::WorldChanged,
-            });
-            return;
-        };
-        if validate_against_current(slot, &response.plan, world).is_err() {
-            self.plans.remove(&companion);
-            report.rejected.push(InstallRejection {
-                companion,
-                attempt,
-                reason: InstallReject::WorldChanged,
+                reason: match failure {
+                    PlanCheckFailure::InvalidPlan => InstallReject::InvalidPlan,
+                    PlanCheckFailure::WorldChanged => InstallReject::WorldChanged,
+                },
             });
             return;
         }
@@ -1299,166 +1202,6 @@ impl Default for PlanHost {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Checks every plan step against the frozen snapshot the plan was asked
-/// for, in step order: a follow target must be in the frozen online set,
-/// a mine target must read from the frozen projection and be mineable
-/// there, and the placing item of a place block must be held in the
-/// frozen inventory. These are the Go decode-time rules
-/// (`validatePlanStepsAgainstSnapshot`); a violation is an invalid plan,
-/// never a world change. The place block registry is enforced by the
-/// `PlanBlock` type itself.
-fn validate_against_frozen(slot: &PlanSlot, plan: &AgentPlan) -> Result<(), InstallReject> {
-    let frozen = &slot.frozen;
-    for step in &plan.steps {
-        match step {
-            PlanStep::GoTo { .. } => {}
-            PlanStep::Follow { player_id } => {
-                if !frozen
-                    .online_players
-                    .iter()
-                    .any(|player| player.player_id == *player_id)
-                {
-                    return Err(InstallReject::InvalidPlan);
-                }
-            }
-            PlanStep::Mine { x, y, z } => {
-                let block = terrain_lookup(
-                    frozen.terrain.origin,
-                    &frozen.terrain.ready_columns,
-                    &frozen.terrain.blocks,
-                    BlockPos::new(*x, *y, *z),
-                )
-                .ok_or(InstallReject::InvalidPlan)?;
-                if !plan_mineable(block) {
-                    return Err(InstallReject::InvalidPlan);
-                }
-            }
-            PlanStep::Place { block, .. } => {
-                let item = plan_block_item(*block);
-                if !frozen
-                    .companion
-                    .inventory
-                    .iter()
-                    .any(|held| held.item == item && held.count >= 1)
-                {
-                    return Err(InstallReject::InvalidPlan);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Revalidates every plan step against the current world.
-///
-/// Mine and place targets must read the same dense value frozen and now,
-/// mine targets must stay minable, place blocks must stay held, follow
-/// targets must stay online at the same position, and every mine or place
-/// chunk revision must be present and unchanged on both sides. A missing
-/// cell or revision fails closed, mirroring the Go authority rebuild.
-fn validate_against_current(
-    slot: &PlanSlot,
-    plan: &AgentPlan,
-    world: &CurrentWorld,
-) -> Result<(), InstallReject> {
-    let terrain = &slot.frozen.terrain;
-    for step in &plan.steps {
-        match step {
-            PlanStep::GoTo { .. } => {}
-            PlanStep::Mine { x, y, z } => {
-                let target = BlockPos::new(*x, *y, *z);
-                let frozen = terrain_lookup(
-                    terrain.origin,
-                    &terrain.ready_columns,
-                    &terrain.blocks,
-                    target,
-                )
-                .ok_or(InstallReject::WorldChanged)?;
-                let current = world
-                    .blocks
-                    .get(&target)
-                    .copied()
-                    .ok_or(InstallReject::WorldChanged)?;
-                if frozen != current || !plan_mineable(current) {
-                    return Err(InstallReject::WorldChanged);
-                }
-                check_revision(slot, world, target)?;
-            }
-            PlanStep::Place { x, y, z, block } => {
-                let target = BlockPos::new(*x, *y, *z);
-                let frozen = terrain_lookup(
-                    terrain.origin,
-                    &terrain.ready_columns,
-                    &terrain.blocks,
-                    target,
-                )
-                .ok_or(InstallReject::WorldChanged)?;
-                let current = world
-                    .blocks
-                    .get(&target)
-                    .copied()
-                    .ok_or(InstallReject::WorldChanged)?;
-                if frozen != current {
-                    return Err(InstallReject::WorldChanged);
-                }
-                let item = plan_block_item(*block);
-                if !world
-                    .inventory
-                    .iter()
-                    .any(|held| held.item == item && held.count >= 1)
-                {
-                    return Err(InstallReject::WorldChanged);
-                }
-                check_revision(slot, world, target)?;
-            }
-            PlanStep::Follow { player_id } => {
-                let frozen = slot
-                    .frozen
-                    .online_players
-                    .iter()
-                    .find(|player| player.player_id == *player_id)
-                    .map(|player| player.position.get())
-                    .ok_or(InstallReject::WorldChanged)?;
-                let current = world
-                    .online_players
-                    .get(player_id)
-                    .copied()
-                    .ok_or(InstallReject::WorldChanged)?;
-                if frozen != current {
-                    return Err(InstallReject::WorldChanged);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Checks the planned target chunk revision is present and unchanged on both
-/// sides; a missing entry fails closed.
-fn check_revision(
-    slot: &PlanSlot,
-    world: &CurrentWorld,
-    target: BlockPos,
-) -> Result<(), InstallReject> {
-    let chunk = target_chunk(target);
-    let frozen = slot
-        .frozen
-        .chunk_revisions
-        .iter()
-        .find(|revision| revision.pos == chunk)
-        .map(|revision| revision.revision)
-        .ok_or(InstallReject::WorldChanged)?;
-    let current = world
-        .chunk_revisions
-        .get(&chunk)
-        .copied()
-        .ok_or(InstallReject::WorldChanged)?;
-    if frozen != current {
-        return Err(InstallReject::WorldChanged);
-    }
-    Ok(())
 }
 
 /// Emits the first-step action for a validated plan: mine holds, places,
