@@ -726,6 +726,11 @@ impl AuthorityState {
             let envelope = self.runner_envelope(companion, generation, action);
             match envelope.and_then(|envelope| self.submit_companion(envelope)) {
                 Ok(_) => submission.admitted.push(companion),
+                // Defensive: the phase check above already refused a
+                // non-Running authority and nothing in this loop changes
+                // the phase, so `submit_companion` cannot report it here.
+                // Should that ever change, the whole call still refuses
+                // rather than reporting a phase refusal per action.
                 Err(error @ ServerError::InvalidState { .. }) => return Err(error),
                 Err(error) => submission.refused.push((companion, error)),
             }

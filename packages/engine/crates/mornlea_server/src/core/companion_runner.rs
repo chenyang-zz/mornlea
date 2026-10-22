@@ -872,6 +872,46 @@ mod tests {
         assert!(!matches!(never.as_slice(), [RunnerEffect::Finish(_)]));
     }
 
+    /// Timing out is terminal for the runner: it reports `TimedOut` once,
+    /// then every later pass and any late path outcome for the search it
+    /// had in flight yields nothing, so the finish can never repeat or be
+    /// followed by movement.
+    #[test]
+    fn timeout_finishes_the_runner_exactly_once() {
+        let steps = vec![go_to(3, 64, 0)];
+        let deadline = task_deadline_ticks(100, 1, false);
+        let mut runner = TaskRunner::installed(1, deadline);
+        let first = runner.on_tick(&steps, &tick(10, 100, [0.5, 64.0, 0.5]));
+        assert!(
+            matches!(first.as_slice(), [RunnerEffect::RequestPath { .. }]),
+            "{first:?}"
+        );
+        let at = runner.on_tick(&steps, &tick(11, deadline, [0.5, 64.0, 0.5]));
+        assert_eq!(at, vec![RunnerEffect::Finish(TaskState::TimedOut)]);
+        assert!(runner.is_finished());
+        for later in 1..=3 {
+            let quiet = runner.on_tick(
+                &steps,
+                &tick(11 + later, deadline + later, [0.5, 64.0, 0.5]),
+            );
+            assert!(
+                quiet.is_empty(),
+                "pass {later} after the timeout: {quiet:?}"
+            );
+        }
+        let late = runner.on_path_outcome(
+            15,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(0, 64, 0), BlockPos::new(3, 64, 0)],
+                revisions: Vec::new(),
+            },
+        );
+        assert!(late.is_empty(), "{late:?}");
+        let after = runner.on_tick(&steps, &tick(16, deadline + 6, [0.5, 64.0, 0.5]));
+        assert!(after.is_empty(), "{after:?}");
+    }
+
     #[test]
     fn single_outstanding_and_cooldown_and_third_failure() {
         let steps = vec![go_to(10, 64, 0)];
