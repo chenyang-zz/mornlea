@@ -1828,6 +1828,11 @@ impl AuthorityState {
             return Ok(false);
         }
         let checked = AgentPlan::try_new(plan.summary.clone(), plan.steps.clone())?;
+        // The start tick reads the settled world clock the expiry check
+        // reads, so stamping and expiry can never disagree. It is read
+        // before any reservation or commit, so a failed read leaves the
+        // task, the chat record and the lifecycle quota untouched.
+        let start_tick = self.settled_read()?.world_time();
         self.reserve_chat_lifecycle_slot()?;
         let Some(installed) = self
             .companion_chat
@@ -1835,9 +1840,6 @@ impl AuthorityState {
         else {
             return Ok(false);
         };
-        // The start tick reads the settled world clock the expiry check
-        // reads, so stamping and expiry can never disagree.
-        let start_tick = self.settled_read()?.world_time();
         let deadline_ticks = timeout_minutes.map(|minutes| {
             super::companion_runner::task_deadline_ticks(
                 start_tick,
@@ -19929,6 +19931,63 @@ mod companion_chat_boundary_tests {
         assert_eq!(task.state, COMPANION_TASK_RUNNING);
         assert_eq!(task.start_tick, world_time);
         assert_eq!(task.deadline_ticks, 0, "follow-tail plan stays exempt");
+    }
+
+    /// A settled read that fails at install refuses before anything is
+    /// committed: the task stays in Planning with no runner, no runtime
+    /// task, no Started fact, and the lifecycle quota untouched.
+    #[test]
+    fn runner_install_refuses_before_commit_when_the_settled_read_fails() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let before_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        // Only the settled read fails; every earlier install check passes.
+        let failure = ServerError::Internal {
+            invariant: "settled read",
+        };
+        a.tick_failure = Some(failure);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert_eq!(
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            ),
+            Err(failure)
+        );
+        a.tick_failure = None;
+        assert_eq!(
+            a.companion_chat_queue(id).unwrap().current.unwrap().phase,
+            crate::core::companion_chat::CompanionChatPhase::Planning
+        );
+        assert!(!a.companion_runners.contains_key(&id));
+        let after_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(after_task, before_task);
+        assert!(a.take_decided_chat_facts().is_empty());
+        assert_eq!(a.companion_chat.external_lifecycle_used(), 0);
     }
 
     /// The Running-entry start tick reads the same settled world time the
