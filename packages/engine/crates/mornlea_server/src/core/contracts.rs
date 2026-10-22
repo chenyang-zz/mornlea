@@ -2892,11 +2892,11 @@ pub trait SnapshotPort {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownPhase {
     StopAdmission,
+    FlushPlayers,
     FinalTick,
     Freeze,
     WaitWorkers,
     FinalizeMemory,
-    FlushPlayers,
     FlushCompanions,
     FlushHostiles,
     FlushPassives,
@@ -2915,11 +2915,11 @@ impl ShutdownPhase {
     pub fn successors() -> &'static [Self] {
         &[
             Self::StopAdmission,
+            Self::FlushPlayers,
             Self::FinalTick,
             Self::Freeze,
             Self::WaitWorkers,
             Self::FinalizeMemory,
-            Self::FlushPlayers,
             Self::FlushCompanions,
             Self::FlushHostiles,
             Self::FlushPassives,

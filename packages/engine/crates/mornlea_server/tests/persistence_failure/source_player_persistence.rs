@@ -1076,6 +1076,208 @@ mod physical {
         assert!(durable.revision > 9);
         reopened.close().unwrap();
     }
+
+    /// Go detaches every session (`host_shutdown.go:78`, which unregisters the
+    /// player from the engine) and flushes players (`host_shutdown.go:83`)
+    /// before `world.Shutdown` (`:93`) runs the final step
+    /// (`shutdown.go:75`). The saved player is therefore the body settled by
+    /// the last ordinary tick: a command still queued at shutdown never
+    /// reaches the player file. The core shutdown machine must save the same
+    /// body even though the final tick still drains that command.
+    #[test]
+    fn actual_shutdown_saves_the_player_settled_before_the_final_step() {
+        use mornlea_server::core::shutdown::{ShutdownPorts, shutdown};
+        let chunk_key = key(Dimension::OVERWORLD, 0, 0);
+        let (mut fixture, mut state) = Fixture::new(
+            Some(saved_player()),
+            Dimension::OVERWORLD,
+            ChunkPos::new(0, 0),
+            vec![(chunk_key, air())],
+        );
+        let mut login = LoginDriver::new();
+        let clock = StepClock(Instant::now());
+        let (mut memory, _session) = connect(
+            &mut fixture,
+            &mut state,
+            &mut login,
+            TransportKind::Memory,
+            1,
+            &clock,
+        );
+        fixture.acquire(&mut state, chunk_key);
+        for (sequence, slot) in [(1, 5), (2, 6)] {
+            memory.send(
+                MemoryTransport::encode_frame(&ClientPacket::SelectHotbar(
+                    SelectHotbar::new(sequence, slot).unwrap(),
+                ))
+                .unwrap(),
+                &mut login.bind(&mut state, &mut fixture.store),
+                &clock,
+            );
+            // Only the first selection settles in an ordinary tick; the
+            // second is still queued when the shutdown starts.
+            if sequence == 1 {
+                state.advance_tick(TickBudget::full()).unwrap();
+            }
+        }
+        assert_eq!(current(&state).inventory.hotbar.selected, 5);
+        let settled = current(&state).clone();
+
+        let mut actors = FamilyFlush {
+            store: &mut fixture.store,
+            clock: &clock,
+        };
+        let (mut reducer, mut idle, mut workers, mut memory_port, mut agent, mut mcp) =
+            (AuthoritativeFinalReducer, IdleStore, Idle, Idle, Idle, Idle);
+        let mut ports = ShutdownPorts {
+            reducer: &mut reducer,
+            workers: &mut workers,
+            actors: &mut actors,
+            memory: &mut memory_port,
+            store: &mut idle,
+            agent: &mut agent,
+            mcp: &mut mcp,
+            clock: &clock,
+        };
+        let report = shutdown(&mut state, &mut ports, deadline()).unwrap();
+        assert_eq!(report.next, ShutdownPhase::Closed);
+        assert!(report.final_tick.is_some());
+        // The final tick leaves no player save behind that no flush writes.
+        assert_eq!(state.save_stats(), SaveStats::default());
+        // The durable player is still the body the last ordinary tick settled.
+        fixture.store.sync(deadline()).unwrap();
+        fixture.store.close(deadline()).unwrap();
+        let mut reopened = DiskStore::open(
+            &fixture.root.0,
+            options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
+        )
+        .unwrap();
+        let LoadedValue::Player(durable) = reopened.load(SaveKey::Player(player())).unwrap() else {
+            panic!("durable player")
+        };
+        assert_eq!(durable.inventory.hotbar.selected, 5);
+        let mut expected = super::stored(settled, false);
+        expected.revision = durable.revision;
+        assert_eq!(durable, expected);
+        reopened.close().unwrap();
+    }
+
+    /// Hands each family to the production per-family flush barrier.
+    struct FamilyFlush<'a> {
+        store: &'a mut AutosaveScheduler<CountingDisk>,
+        clock: &'a dyn Clock,
+    }
+    impl ActorPersistence for FamilyFlush<'_> {
+        fn flush(&mut self, _: SaveKey, _: Deadline) -> Result<FlushReport, ServerError> {
+            Err(ServerError::Internal {
+                invariant: "actor flush requires the authority",
+            })
+        }
+        fn flush_authority(
+            &mut self,
+            authority: &mut AuthorityState,
+            family: SaveKey,
+            deadline: Deadline,
+        ) -> Result<FlushReport, ServerError> {
+            self.store
+                .flush_family(deadline, authority, &family, self.clock)
+        }
+    }
+    /// The store lifecycle port; the test syncs and closes the real store.
+    struct IdleStore;
+    impl StoreHandle for IdleStore {
+        fn submit(&mut self, request: SaveRequest) -> Result<SaveTicket, SubmitSaveError> {
+            Err(SubmitSaveError {
+                error: ServerError::Internal {
+                    invariant: "unused submit",
+                },
+                request,
+            })
+        }
+        fn poll(&mut self, _: SaveTicket) -> SavePoll {
+            SavePoll::Pending
+        }
+        fn poll_tick(
+            &mut self,
+            _: u64,
+            _: SaveBudget,
+            _: &mut dyn SaveAuthority,
+        ) -> Result<SaveScheduleReport, ServerError> {
+            Err(ServerError::Internal {
+                invariant: "unused poll tick",
+            })
+        }
+        fn cancel_pending(&mut self) -> Result<Vec<OwnedSnapshot>, ServerError> {
+            Ok(Vec::new())
+        }
+        fn flush(
+            &mut self,
+            _: Deadline,
+            _: &mut dyn SaveAuthority,
+            _: &dyn Clock,
+        ) -> Result<FlushReport, ServerError> {
+            Ok(FlushReport::default())
+        }
+        fn sync(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
+    struct Idle;
+    impl WorkerLifecycle for Idle {
+        fn stop_new(&mut self) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn cancel(&mut self) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn wait(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
+    impl MemoryFinalizer for Idle {
+        fn pending(&self) -> MemoryFinalizationReport {
+            MemoryFinalizationReport::default()
+        }
+        fn begin_attempt(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn drain(&mut self, _: Deadline) -> Result<MemoryFinalizationReport, ServerError> {
+            Ok(MemoryFinalizationReport::default())
+        }
+    }
+    impl AgentHandle for Idle {
+        fn submit(&mut self, _: AgentRequest) -> Result<AgentRequestId, ServerError> {
+            Err(ServerError::Internal {
+                invariant: "unused agent submit",
+            })
+        }
+        fn poll(&mut self, _: AgentRequestId) -> AgentPoll {
+            AgentPoll::Pending
+        }
+        fn cancel(&mut self, _: AgentRequestId, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn freeze(&mut self, _: &dyn Clock) -> Option<FrozenLease> {
+            None
+        }
+        fn release(&mut self, _: &FrozenLease, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
+    impl McpLifecycle for Idle {
+        fn close(&mut self, _: Deadline) -> Result<(), ServerError> {
+            Ok(())
+        }
+    }
     enum Wire {
         Memory {
             transport: MemoryTransport,

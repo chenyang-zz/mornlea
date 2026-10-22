@@ -3846,6 +3846,9 @@ impl AuthorityState {
                 super::shutdown::finalize_memory(self, io.memory, io.clock, deadline, report)
             }
             ShutdownPhase::FlushPlayers => {
+                if let Some(error) = self.tick_failure {
+                    return Err(error);
+                }
                 for (key, record) in &self.sessions {
                     if record.phase == SessionPhase::Retired {
                         continue;
@@ -12725,7 +12728,9 @@ mod failed_tick_tests {
             };
             let failure = result.unwrap_err();
             assert_eq!(failure.error, error);
-            assert_eq!(failure.report.next, ShutdownPhase::FinalTick);
+            // Players flush first; a failed authority stops there, before
+            // any flush I/O or final tick.
+            assert_eq!(failure.report.next, ShutdownPhase::FlushPlayers);
             assert!(!failure.report.retryable);
             assert_eq!(failure.report.completed, vec![ShutdownPhase::StopAdmission]);
             assert_eq!(failure.report.final_tick, None);

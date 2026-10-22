@@ -1,11 +1,12 @@
 //! Retryable shutdown: one final unpublished tick and ordered closure.
 //!
 //! This module owns the resumable phase machine behind the endpoint's
-//! shutdown boundary. A first attempt stops admission, drains every accepted
-//! command into exactly one final unpublished tick, freezes the authority and
-//! the Agent lease, quiesces the workers, finalizes Agent memory, flushes the
-//! save families in the fixed order players, companions, hostiles, passives,
-//! world chunks and metadata, syncs the store, releases the Agent lease, and
+//! shutdown boundary. A first attempt stops admission, flushes the players
+//! settled by the last ordinary tick, drains every accepted command into
+//! exactly one final unpublished tick, freezes the authority and the Agent
+//! lease, quiesces the workers, finalizes Agent memory, flushes the remaining
+//! save families in the fixed order companions, hostiles, passives, world
+//! chunks and metadata, syncs the store, releases the Agent lease, and
 //! only then closes the Agent, the MCP service, the store and the workers
 //! before the authority flips to `Closed`.
 //!
@@ -141,9 +142,16 @@ fn run_phase(
         ShutdownPhase::FinalizeMemory => {
             finalize_memory(state, ports.memory, ports.clock, deadline, report)
         }
-        ShutdownPhase::FlushPlayers | ShutdownPhase::FlushWorld => {
+        ShutdownPhase::FlushPlayers => {
+            // The first phase after admission stops: a failed authority
+            // refuses here with its retained error, before any flush I/O or
+            // final tick, so the attempt stays permanently failed.
+            if let Some(error) = state.tick_failure() {
+                return Err(error);
+            }
             flush_lane(state, ports, phase, deadline, report)
         }
+        ShutdownPhase::FlushWorld => flush_lane(state, ports, phase, deadline, report),
         ShutdownPhase::FlushCompanions
         | ShutdownPhase::FlushHostiles
         | ShutdownPhase::FlushPassives
@@ -280,8 +288,9 @@ pub fn flush_phase(key: &SaveKey) -> ShutdownPhase {
 /// Flushes one lane's frozen save keys.
 ///
 /// The frozen authority is an idempotent read of the dirty and in-flight
-/// key set, so deriving it here observes the final tick's effects even on a
-/// resumed attempt, and a lane with no keys performs no flush call.
+/// key set, so deriving it here observes every settled tick before the
+/// phase (the last ordinary tick for players, the final tick for the world)
+/// even on a resumed attempt, and a lane with no keys performs no flush call.
 fn flush_lane(
     state: &mut AuthorityState,
     ports: &mut ShutdownPorts<'_>,
@@ -402,16 +411,27 @@ mod flush_order_tests {
             ]
         );
         assert_eq!(flushes, FLUSH_ORDER);
-        // The flush families sit contiguously between memory finalization
-        // and the store sync, so no other boundary runs between two of them.
-        let first = position(ShutdownPhase::FlushPlayers);
-        for (offset, phase) in FLUSH_ORDER.iter().enumerate() {
+        // Players flush right after admission stops and before the final
+        // tick, like Go's host flush ahead of the server shutdown.
+        assert_eq!(
+            position(ShutdownPhase::StopAdmission) + 1,
+            position(ShutdownPhase::FlushPlayers)
+        );
+        assert_eq!(
+            position(ShutdownPhase::FlushPlayers) + 1,
+            position(ShutdownPhase::FinalTick)
+        );
+        // The world-side families sit contiguously between memory
+        // finalization and the store sync, so no other boundary runs between
+        // two of them.
+        let first = position(ShutdownPhase::FlushCompanions);
+        for (offset, phase) in FLUSH_ORDER[1..].iter().enumerate() {
             assert_eq!(position(*phase), first + offset);
         }
         assert_eq!(position(ShutdownPhase::FinalizeMemory) + 1, first);
         assert_eq!(
             position(ShutdownPhase::StoreSync),
-            first + FLUSH_ORDER.len()
+            first + FLUSH_ORDER.len() - 1
         );
     }
 
@@ -424,8 +444,24 @@ mod flush_order_tests {
         let host = go_source("server/server/host_shutdown.go");
         let server = go_source("server/server/shutdown.go");
         let world = go_source("server/server/persistence/world.go");
+        // Sessions detach (unregistering each player from the engine) and
+        // players flush before the server shutdown runs its final step, so
+        // the saved player is the body the last ordinary step settled.
+        assert_eq!(
+            line_of(
+                &host,
+                "h.world.DetachSession(active.Session, active.Generation, network.ErrClosed)"
+            ),
+            78
+        );
         assert_eq!(line_of(&host, "h.players.Flush(ctx)"), 83);
         assert_eq!(line_of(&host, "worldErr := h.world.Shutdown(ctx)"), 93);
+        assert_eq!(
+            line_of(&server, "server.engine.StepWithTunables(tickTunables)"),
+            75
+        );
+        assert!(position(ShutdownPhase::StopAdmission) < position(ShutdownPhase::FlushPlayers));
+        assert!(position(ShutdownPhase::FlushPlayers) < position(ShutdownPhase::FinalTick));
         let pinned = [
             (
                 ShutdownPhase::FlushCompanions,
@@ -451,8 +487,8 @@ mod flush_order_tests {
             ),
             (ShutdownPhase::StoreClose, "server.store.Close()", 193),
         ];
-        let mut previous_line = 0;
-        let mut previous_phase = position(ShutdownPhase::FlushPlayers);
+        let mut previous_line = 75;
+        let mut previous_phase = position(ShutdownPhase::FinalTick);
         for (phase, needle, line) in pinned {
             assert_eq!(line_of(&server, needle), line, "{needle}");
             assert!(line > previous_line, "Go order at {needle}");
