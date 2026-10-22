@@ -907,3 +907,13 @@ pub(crate) fn drift_online_player(authority: &mut AuthorityState, player_id: Pla
     position[0] += 5.0;
     actor.motion = motion(position);
 }
+
+/// Empties one companion's inventory, as if every held item left it.
+pub(crate) fn clear_companion_inventory(authority: &mut AuthorityState, id: CompanionId) {
+    authority
+        .residents
+        .inventories
+        .get_mut(&ActorKey::Companion(id))
+        .expect("companion inventory")
+        .slots = [ItemStack::default(); 36];
+}

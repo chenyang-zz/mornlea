@@ -387,8 +387,8 @@ mod tests {
         SnapshotRegistration,
     };
     use crate::core::state::companion_planning::tests::{
-        FIXTURES, add_companion, admit_command, companion_actor, drift_online_player, motion,
-        planning_fixture_with_runtime, stored_task,
+        FIXTURES, add_companion, admit_command, clear_companion_inventory, companion_actor,
+        drift_online_player, motion, planning_fixture_with_runtime, stored_task,
     };
 
     fn uuid(tag: u8) -> [u8; 16] {
@@ -1031,6 +1031,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
+        let failed_generation = rig.agent.plan_requests()[0].generation;
+        // A second FIFO command waits behind the first companion's task.
+        let issuer = fixture
+            .authority
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .unwrap()
+            .issuer
+            .clone();
+        admit_command(&mut fixture.authority, id, "again", issuer);
         for request in rig.agent.plan_requests() {
             rig.agent.complete(&request, go_home_plan());
         }
@@ -1053,16 +1064,15 @@ mod tests {
             vec![other],
             "the other companion installs unaffected"
         );
-        assert!(
-            fixture
-                .authority
-                .companion_chat_queue(id)
-                .unwrap()
-                .current
-                .is_none()
-        );
-        // No same-drive or later re-plan of the failed command.
+        assert!(report.dispatched.is_empty(), "nothing re-planned this pass");
         assert_eq!(rig.agent.plan_requests().len(), 2);
+        // The next FIFO command was promoted but its body is inactive, so
+        // it stays queued, exactly as Go keeps an inactive body's task.
+        let view = fixture.authority.companion_chat_queue(id).unwrap();
+        assert_eq!(
+            view.current.unwrap().phase,
+            crate::core::companion_chat::CompanionChatPhase::Queued
+        );
         drive(
             &mut plan_loop,
             &mut fixture.authority,
@@ -1073,6 +1083,195 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
+        // Once the body is active again only the NEXT command plans; the
+        // failed generation is never dispatched again.
+        companion_actor(&mut fixture.authority, id).lifecycle =
+            crate::contracts::ActorLifecycle::Active;
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &both,
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(report.dispatched, vec![id]);
+        let requests = rig.agent.plan_requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].companion_id, id);
+        assert!(requests[2].generation > failed_generation);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(
+                    |request| request.companion_id == id && request.generation == failed_generation
+                )
+                .count(),
+            1,
+            "the failed command is never re-planned"
+        );
+    }
+
+    #[test]
+    fn plan_loop_next_fifo_task_dispatches_same_drive_after_install_failure() {
+        // Go applies planner outcomes before dispatchPlanning in one tick
+        // (companion_manager.go:432,439), and dispatchPlanning promotes the
+        // freed FIFO head with BeginHead (:1045) and dispatches it in the
+        // same pass. The failed command itself is never re-planned.
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new();
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        let first = rig.agent.plan_requests()[0].clone();
+        let issuer = fixture
+            .authority
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .unwrap()
+            .issuer
+            .clone();
+        admit_command(&mut fixture.authority, id, "again", issuer);
+        // A follow target outside the frozen online set: rejected at
+        // install, terminal for the current task only.
+        let stranger = PlayerId::try_from_bytes(uuid(99)).unwrap();
+        let plan = crate::contracts::AgentPlan::try_new(
+            "follow".to_owned(),
+            vec![PlanStep::Follow {
+                player_id: stranger,
+            }],
+        )
+        .unwrap();
+        rig.agent.complete(&first, plan);
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
+        assert_eq!(report.dispatched, vec![id], "next FIFO head plans now");
+        let requests = rig.agent.plan_requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].generation > first.generation);
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(rig.agent.plan_requests().len(), 2, "no re-plan");
+    }
+
+    fn place_plan(block: crate::contracts::PlanBlock) -> crate::contracts::AgentPlan {
+        // Air above the companion's standing cell, inside a ready chunk.
+        crate::contracts::AgentPlan::try_new(
+            "place".to_owned(),
+            vec![PlanStep::Place {
+                x: -1,
+                y: 316,
+                z: -16,
+                block,
+            }],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plan_loop_frozen_place_inventory_fails_invalid_plan() {
+        // Go decode-time check (planner.go:282-284) against the frozen
+        // snapshot is InvalidPlan (companion_agent.go:666-669 ->
+        // companion_manager.go:605-606); the stored reason is visible.
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new();
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        let request = rig.agent.plan_requests()[0].clone();
+        // The fixture companion holds cobblestone, never stone.
+        rig.agent
+            .complete(&request, place_plan(crate::contracts::PlanBlock::Stone));
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
+        let stored = stored_task(&fixture.authority, id);
+        assert_eq!(stored.state, mornlea_storage::COMPANION_TASK_FAILED);
+        assert_eq!(
+            stored.fail_reason,
+            mornlea_storage::COMPANION_TASK_FAIL_INVALID_PLAN
+        );
+    }
+
+    #[test]
+    fn plan_loop_current_place_inventory_fails_world_changed() {
+        // Go install-time revalidation against the current snapshot
+        // (companion_manager.go:651-653) fails as WorldChanged (:590-592).
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new();
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        let request = rig.agent.plan_requests()[0].clone();
+        rig.agent.complete(
+            &request,
+            place_plan(crate::contracts::PlanBlock::Cobblestone),
+        );
+        // The held cobblestone leaves the companion after the freeze.
+        clear_companion_inventory(&mut fixture.authority, id);
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(report.failed, vec![(id, TaskFailure::WorldChanged)]);
+        let stored = stored_task(&fixture.authority, id);
+        assert_eq!(
+            stored.fail_reason,
+            mornlea_storage::COMPANION_TASK_FAIL_WORLD_CHANGED
+        );
     }
 
     #[test]
