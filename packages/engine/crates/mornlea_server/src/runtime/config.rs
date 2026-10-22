@@ -29,6 +29,7 @@ mod json;
 mod parity_tests;
 mod resolve;
 
+use crate::core::companion_runner::TaskTimeoutMinutes;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -191,7 +192,7 @@ pub struct AiConfig {
     companions: Vec<(CompanionId, CompanionName)>,
     endpoint: String,
     api_key_env: String,
-    task_timeout_minutes: u32,
+    task_timeout_minutes: TaskTimeoutMinutes,
 }
 
 impl AiConfig {
@@ -210,8 +211,8 @@ impl AiConfig {
         &self.api_key_env
     }
 
-    /// Effective task timeout in minutes (Go `AI.TaskTimeout`), 1..=60.
-    pub fn task_timeout_minutes(&self) -> u32 {
+    /// Effective task timeout (Go `AI.TaskTimeout`), 1..=60 minutes by type.
+    pub fn task_timeout_minutes(&self) -> TaskTimeoutMinutes {
         self.task_timeout_minutes
     }
 }

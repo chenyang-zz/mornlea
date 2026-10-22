@@ -466,7 +466,7 @@ fn two_configured_companions_restore_from_v5_save_and_activate_on_first_tick() {
             .collect::<Vec<_>>(),
         vec![(companion(1), "Mira".into()), (companion(2), "Tove".into())]
     );
-    assert_eq!(runtime.task_timeout_minutes(), 7);
+    assert_eq!(runtime.task_timeout_minutes().get(), 7);
     assert_eq!(
         runtime.agent().namespace().bytes(),
         aggregate.agent_namespace_id.to_bytes()

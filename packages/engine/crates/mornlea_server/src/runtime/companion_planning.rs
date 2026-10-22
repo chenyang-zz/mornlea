@@ -19,6 +19,7 @@ use crate::contracts::{
     SnapshotPort,
 };
 use crate::core::companion_chat::CompanionChatPhase;
+use crate::core::companion_runner::TaskTimeoutMinutes;
 use crate::runtime::companion_runner::{PendingCompanionPaths, drive_companion_runners};
 use crate::state::AuthorityState;
 
@@ -86,17 +87,29 @@ struct TrackedDispatch {
 }
 
 /// The companion plan loop: an Agent host plus the dispatches this loop
-/// has in flight, held across tick boundaries.
-#[derive(Default)]
+/// has in flight, held across tick boundaries, and the task timeout frozen
+/// at startup that every install stamps.
 pub struct CompanionPlanLoop {
     host: PlanHost,
     tracked: BTreeMap<CompanionId, TrackedDispatch>,
+    task_timeout: TaskTimeoutMinutes,
 }
 
 impl CompanionPlanLoop {
-    /// An empty loop with no in-flight planning.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty loop with no in-flight planning. The timeout is taken
+    /// once here and has no setter: every install of this loop's lifetime
+    /// stamps the same startup value.
+    pub fn new(task_timeout: TaskTimeoutMinutes) -> Self {
+        Self {
+            host: PlanHost::default(),
+            tracked: BTreeMap::new(),
+            task_timeout,
+        }
+    }
+
+    /// The startup-frozen task timeout this loop stamps on install.
+    pub fn task_timeout(&self) -> TaskTimeoutMinutes {
+        self.task_timeout
     }
 
     /// The Agent host, for callers that drive dialogue or inspect gates.
@@ -124,7 +137,6 @@ impl CompanionPlanLoop {
         companions: &[CompanionId],
         pending_paths: &mut PendingCompanionPaths,
         ports: CompanionPlanningPorts<'_>,
-        task_timeout_minutes: u32,
     ) -> Result<CompanionPlanningReport, ServerError> {
         let CompanionPlanningPorts {
             agent,
@@ -190,7 +202,7 @@ impl CompanionPlanLoop {
                 installed.companion,
                 tracked.generation,
                 installed.plan,
-                task_timeout_minutes,
+                self.task_timeout,
             )? {
                 report.installed.push(installed.companion);
             }
@@ -391,6 +403,11 @@ mod tests {
         drift_online_player, motion, planning_fixture_with_runtime, stored_task,
     };
 
+    /// The frozen timeout every loop in these tests is built with.
+    fn timeout() -> TaskTimeoutMinutes {
+        TaskTimeoutMinutes::try_new(7).unwrap()
+    }
+
     fn uuid(tag: u8) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[0] = tag;
@@ -547,7 +564,6 @@ mod tests {
         companions: &[CompanionId],
         pending: &mut PendingCompanionPaths,
         rig: &mut Rig,
-        timeout: u32,
     ) -> Result<CompanionPlanningReport, ServerError> {
         let mut tag = rig.mint_tag;
         let report = {
@@ -564,7 +580,7 @@ mod tests {
                 lease: Some((Lease::try_from_bytes(uuid(30)).unwrap(), 9)),
                 mint_id: &mut mint,
             };
-            plan_loop.drive(state, companions, pending, ports, timeout)
+            plan_loop.drive(state, companions, pending, ports)
         };
         rig.mint_tag = tag;
         report
@@ -610,7 +626,7 @@ mod tests {
     #[test]
     fn plan_loop_dispatches_queued_task_once_and_holds_in_flight() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         let report = drive(
@@ -619,7 +635,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.dispatched, vec![id]);
@@ -632,7 +647,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert!(report.dispatched.is_empty());
@@ -649,7 +663,7 @@ mod tests {
         let (mut fixture, id) = queued_fixture();
         companion_actor(&mut fixture.authority, id).lifecycle =
             crate::contracts::ActorLifecycle::Dead;
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -658,7 +672,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert!(rig.agent.plan_requests().is_empty());
@@ -672,7 +685,7 @@ mod tests {
     #[test]
     fn plan_loop_dialogue_in_flight_fails_planner_unavailable_same_drive() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         // Occupy the companion's dialogue gate directly through the host.
         let dispatch = DialogueDispatch {
@@ -705,7 +718,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::PlannerUnavailable)]);
@@ -726,7 +738,7 @@ mod tests {
     #[test]
     fn plan_loop_capacity_full_fails_planner_unavailable_same_drive() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         // Fill every worker slot with dialogue for other companions.
         for tag in 0..4u8 {
@@ -762,7 +774,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::PlannerUnavailable)]);
@@ -773,7 +784,7 @@ mod tests {
     fn plan_loop_snapshot_build_failure_fails_planner_unavailable() {
         let (mut fixture, id) = queued_fixture();
         companion_actor(&mut fixture.authority, id).motion = motion([2_147_483_632.0, 64.0, 0.0]);
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         let report = drive(
@@ -782,7 +793,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::PlannerUnavailable)]);
@@ -799,7 +809,7 @@ mod tests {
     #[test]
     fn plan_loop_agent_timeout_fails_planner_unavailable() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -808,7 +818,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -824,7 +833,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::PlannerUnavailable)]);
@@ -842,7 +850,7 @@ mod tests {
     #[test]
     fn plan_loop_agent_malformed_fails_invalid_plan() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -851,7 +859,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -868,7 +875,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
@@ -885,7 +891,7 @@ mod tests {
     #[test]
     fn plan_loop_installs_and_runner_completes_without_double_drive() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -894,7 +900,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -905,7 +910,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.installed, vec![id]);
@@ -915,7 +919,10 @@ mod tests {
         );
         // Deadline stamped at Running entry from the bare frozen minutes.
         let stored = stored_task(&fixture.authority, id);
-        assert_eq!(stored.deadline_ticks, stored.start_tick + 7 * 1200);
+        assert_eq!(
+            stored.deadline_ticks,
+            stored.start_tick + u64::from(timeout().get()) * 1200
+        );
         assert_ne!(stored.start_tick, 0);
         // The runner issued its path search this pass; the outcome lands
         // no earlier than the next pass, which completes the go_to.
@@ -929,7 +936,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(
@@ -944,7 +950,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert!(
@@ -968,7 +973,7 @@ mod tests {
         // A follow target from the frozen snapshot's online set.
         let snapshot = fixture.authority.companion_planning_snapshot(id).unwrap();
         let player = snapshot.online_players[0].player_id;
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -977,7 +982,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -993,7 +997,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.installed, vec![id]);
@@ -1009,7 +1012,7 @@ mod tests {
         let (mut fixture, id) = queued_fixture();
         let other = CompanionId::try_from_bytes(uuid(21)).unwrap();
         add_companion(&mut fixture, other, "Milo", "go");
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         let both = [id, other];
@@ -1019,7 +1022,6 @@ mod tests {
             &both,
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
@@ -1047,7 +1049,6 @@ mod tests {
             &both,
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::WorldChanged)]);
@@ -1071,7 +1072,6 @@ mod tests {
             &both,
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
@@ -1085,7 +1085,6 @@ mod tests {
             &both,
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.dispatched, vec![id]);
@@ -1112,7 +1111,7 @@ mod tests {
         // freed FIFO head with BeginHead (:1045) and dispatches it in the
         // same pass. The failed command itself is never re-planned.
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1121,7 +1120,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let first = rig.agent.plan_requests()[0].clone();
@@ -1151,7 +1149,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
@@ -1165,7 +1162,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2, "no re-plan");
@@ -1191,7 +1187,7 @@ mod tests {
         // snapshot is InvalidPlan (companion_agent.go:666-669 ->
         // companion_manager.go:605-606); the stored reason is visible.
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1200,7 +1196,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1213,7 +1208,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
@@ -1231,7 +1225,7 @@ mod tests {
         // snapshot is InvalidPlan (companion_agent.go:666-669 ->
         // companion_manager.go:605-606); the stored reason is visible.
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1240,7 +1234,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1262,7 +1255,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
@@ -1279,7 +1271,7 @@ mod tests {
         // Go install-time revalidation against the current snapshot
         // (companion_manager.go:651-653) fails as WorldChanged (:586-588).
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1288,7 +1280,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1304,7 +1295,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::WorldChanged)]);
@@ -1318,7 +1308,7 @@ mod tests {
     #[test]
     fn plan_loop_outer_authority_error_propagates_unchanged_and_fails_nobody() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1327,7 +1317,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1342,7 +1331,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap_err();
         assert_eq!(
@@ -1361,7 +1349,7 @@ mod tests {
     #[test]
     fn plan_loop_outcome_for_replaced_task_discarded_silently() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1370,7 +1358,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1401,7 +1388,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert!(report.installed.is_empty());
@@ -1418,7 +1404,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
@@ -1427,7 +1412,7 @@ mod tests {
     #[test]
     fn plan_loop_identity_mismatch_clears_gate_and_fails_task() {
         let (mut fixture, id) = queued_fixture();
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1436,7 +1421,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1469,7 +1453,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::PlannerUnavailable)]);
@@ -1494,7 +1477,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(rig.agent.plan_requests().len(), 2);
@@ -1505,7 +1487,7 @@ mod tests {
         let (mut fixture, id) = queued_fixture();
         let snapshot = fixture.authority.companion_planning_snapshot(id).unwrap();
         let player: PlayerId = snapshot.online_players[0].player_id;
-        let mut plan_loop = CompanionPlanLoop::new();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
         drive(
@@ -1514,7 +1496,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -1531,7 +1512,6 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            7,
         )
         .unwrap();
         assert_eq!(report.failed, vec![(id, TaskFailure::WorldChanged)]);

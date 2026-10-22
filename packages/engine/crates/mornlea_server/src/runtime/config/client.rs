@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use mornlea_domain::{CompanionId, CompanionName};
 
 use crate::agent::http::AgentEndpoint;
+use crate::core::companion_runner::TaskTimeoutMinutes;
 
 use super::json::{JsonObject, JsonValue, go_equal_fold, go_to_lower};
 use super::{AiConfig, ConfigError, ConfigWarning, go_f64, invalid, lookup, warn_clamp};
@@ -23,8 +24,6 @@ const MAX_TEXTURE_PACK_PATH_BYTES: usize = 1024;
 const MAX_ACTIVE_COMPANIONS: usize = 4;
 /// Mirrors the `companion.ValidateTaskTimeoutMinutes` range.
 const TASK_TIMEOUT_MINUTES: std::ops::RangeInclusive<i64> = 1..=60;
-/// Mirrors `companion.TaskTimeoutDefaultMinutes`, used when the key is absent.
-const TASK_TIMEOUT_DEFAULT_MINUTES: u32 = 10;
 /// Mirrors the `WindowSize` presets.
 const WINDOW_SIZES: [&str; 3] = ["640x360", "960x540", "1280x720"];
 /// Mirrors `knownAIFieldKeys`; anything else under `ai` only warns.
@@ -361,7 +360,8 @@ pub(super) fn validate_ai(
             go_string_into(raw, "ai.agentService.apiKeyEnv", &mut api_key_env)?;
         }
     }
-    let mut task_timeout_minutes = TASK_TIMEOUT_DEFAULT_MINUTES;
+    // Mirrors `companion.TaskTimeoutDefaultMinutes`, used when the key is absent.
+    let mut task_timeout_minutes = TaskTimeoutMinutes::DEFAULT;
     if let Some(raw) = lookup(fields, "taskTimeoutMinutes", "ai")? {
         // Null leaves the zero value, which the range check then refuses.
         let minutes = super::go_int(raw, "ai.taskTimeoutMinutes")?.unwrap_or(0);
@@ -371,8 +371,10 @@ pub(super) fn validate_ai(
                 format!("{minutes} is outside 1..60"),
             ));
         }
-        task_timeout_minutes =
-            u32::try_from(minutes).map_err(|_| invalid("ai.taskTimeoutMinutes", "overflow"))?;
+        task_timeout_minutes = u32::try_from(minutes)
+            .ok()
+            .and_then(|minutes| TaskTimeoutMinutes::try_new(minutes).ok())
+            .ok_or_else(|| invalid("ai.taskTimeoutMinutes", "overflow"))?;
     }
 
     let mut definitions = Vec::with_capacity(entries.len());

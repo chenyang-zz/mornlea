@@ -26,7 +26,7 @@
 use mornlea_domain::{BlockPos, CompanionId, TaskFailure, TaskState};
 use mornlea_engine::native::contracts::pathfind::PathGrid;
 
-use super::contracts::{CompanionAction, PlanBlock, PlanStep};
+use super::contracts::{CompanionAction, PlanBlock, PlanStep, ServerError};
 
 /// World ticks in one minute at the fixed 20 ticks per second rate.
 pub const TICKS_PER_MINUTE: u64 = 1200;
@@ -42,6 +42,41 @@ pub const FOLLOW_DISTANCE_BLOCKS: f32 = 4.0;
 pub const FOLLOW_REPLAN_DRIFT_BLOCKS: f32 = 2.0;
 /// Horizontal arrival radius around a waypoint centre, in blocks.
 pub const WAYPOINT_ARRIVAL_RADIUS: f32 = 0.35;
+
+/// Smallest accepted task timeout, in minutes (Go `ValidateTaskTimeoutMinutes`).
+pub const MIN_TIMEOUT_MINUTES: u32 = 1;
+/// Largest accepted task timeout, in minutes (Go `ValidateTaskTimeoutMinutes`).
+pub const MAX_TIMEOUT_MINUTES: u32 = 60;
+
+/// A task run timeout frozen at startup, in minutes.
+///
+/// Only values in `1..=60` construct, the range the Go config loader
+/// accepts, so a production install can never carry the unset or an
+/// out-of-range value. The value is plain data: once a holder is built
+/// from it there is no way to change it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskTimeoutMinutes(u32);
+
+impl TaskTimeoutMinutes {
+    /// The Go default used when the config key is absent.
+    pub const DEFAULT: Self = Self(DEFAULT_TIMEOUT_MINUTES);
+
+    /// Accepts exactly `1..=60` minutes.
+    pub fn try_new(minutes: u32) -> Result<Self, ServerError> {
+        if (MIN_TIMEOUT_MINUTES..=MAX_TIMEOUT_MINUTES).contains(&minutes) {
+            Ok(Self(minutes))
+        } else {
+            Err(ServerError::InvalidInput {
+                field: "task_timeout_minutes",
+            })
+        }
+    }
+
+    /// The minutes value.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
 
 /// Deadline for a task entering Running: the entry world time plus the
 /// timeout converted to ticks. A follow-tail plan keeps zero, which the
@@ -793,6 +828,25 @@ mod tests {
         assert_eq!(task_deadline_ticks(500, 10, true), 0);
         // Unset minutes fall back to the default.
         assert_eq!(task_deadline_ticks(0, 0, false), 12_000);
+    }
+
+    #[test]
+    fn task_timeout_accepts_only_the_go_config_range() {
+        // Go config.go validates taskTimeoutMinutes to 1..=60 and
+        // defaults an absent key to 10.
+        for minutes in [0, MAX_TIMEOUT_MINUTES + 1, u32::MAX] {
+            assert_eq!(
+                TaskTimeoutMinutes::try_new(minutes),
+                Err(ServerError::InvalidInput {
+                    field: "task_timeout_minutes"
+                })
+            );
+        }
+        for minutes in MIN_TIMEOUT_MINUTES..=MAX_TIMEOUT_MINUTES {
+            assert_eq!(TaskTimeoutMinutes::try_new(minutes).unwrap().get(), minutes);
+        }
+        assert_eq!(TaskTimeoutMinutes::DEFAULT.get(), DEFAULT_TIMEOUT_MINUTES);
+        assert_eq!(DEFAULT_TIMEOUT_MINUTES, 10);
     }
 
     #[test]

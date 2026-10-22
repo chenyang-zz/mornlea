@@ -1693,6 +1693,13 @@ impl AuthorityState {
     /// is left unchanged), and the original captured issuer and command emit
     /// a broadcast started fact. No model, deadline, or task-runner policy is
     /// invented here and the storage wire format is unchanged.
+    ///
+    /// Test fixture seam only: it installs no task runner and stamps no
+    /// deadline, so a task installed here never moves or expires. Production
+    /// installs go through [`Self::install_companion_chat_plan_with_timeout`]
+    /// with the startup-frozen timeout; integration fixtures that never drive
+    /// the runner are the only other callers, which is why this stays public.
+    #[doc(hidden)]
     pub fn install_companion_chat_plan(
         &mut self,
         id: CompanionId,
@@ -1703,18 +1710,18 @@ impl AuthorityState {
     }
 
     /// Installs a validated plan and stamps the task deadline at Running
-    /// entry from the bare frozen timeout minutes: the entry world time
+    /// entry from the timeout frozen at startup: the entry world time
     /// plus the minutes converted at 1200 ticks per minute, with a
-    /// follow-tail plan keeping the zero exemption. This is the seam the
-    /// runtime assembly drives; the runner state starts here.
+    /// follow-tail plan keeping the zero exemption. This is the only
+    /// install the runtime assembly drives; the runner state starts here.
     pub fn install_companion_chat_plan_with_timeout(
         &mut self,
         id: CompanionId,
         generation: u64,
         plan: AgentPlan,
-        timeout_minutes: u32,
+        timeout: super::companion_runner::TaskTimeoutMinutes,
     ) -> Result<bool, ServerError> {
-        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout_minutes))
+        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout.get()))
     }
 
     fn install_companion_chat_plan_inner(
@@ -19829,8 +19836,13 @@ mod companion_chat_boundary_tests {
             .expect("planning receipt");
         let world_time = a.settled_read().unwrap().world_time();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19879,8 +19891,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19937,8 +19954,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -20027,8 +20049,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         for _ in 0..3 {
             let output = a.advance_companion_runners(Vec::new()).unwrap();
@@ -20197,8 +20224,13 @@ mod companion_chat_boundary_tests {
             .unwrap()
             .expect("planning receipt");
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         // Give the runner a stale deadline and a dangling request.
         a.companion_runners

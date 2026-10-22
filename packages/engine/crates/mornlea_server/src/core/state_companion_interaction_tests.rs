@@ -330,7 +330,12 @@ impl Harness {
         let plan = AgentPlan::try_new("执行".to_owned(), steps).unwrap();
         assert!(
             self.a
-                .install_companion_chat_plan_with_timeout(id, planning.generation, plan, minutes)
+                .install_companion_chat_plan_with_timeout(
+                    id,
+                    planning.generation,
+                    plan,
+                    crate::core::companion_runner::TaskTimeoutMinutes::try_new(minutes).unwrap(),
+                )
                 .unwrap()
         );
         self.collect_facts();
