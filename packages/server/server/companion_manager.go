@@ -577,11 +577,13 @@ func (m *companionManager) applyPlannerOutcome(outcome plannerOutcome) {
 	if !ok || current.State != companion.TaskPlanning {
 		return
 	}
-	if outcome.err == nil && !validCompanionPlanningIdentity(outcome) {
-		return
-	}
 	slot.planningInFlight = false
 	switch {
+	case outcome.err == nil && !validCompanionPlanningIdentity(outcome):
+		// The generation and attempt match this dispatch, so no other reply
+		// will arrive for it: discard the result and fail only the current
+		// task instead of leaving the planning gate set forever.
+		m.applyQueueEvents(slot, slot.queue.FailPlanning(companion.TaskFailPlannerUnavailable))
 	case outcome.err == nil:
 		if !m.plannerOutcomeMatchesCurrentAuthority(slot, current.Command, outcome) {
 			m.applyQueueEvents(slot, slot.queue.FailPlanning(companion.TaskFailWorldChanged))
