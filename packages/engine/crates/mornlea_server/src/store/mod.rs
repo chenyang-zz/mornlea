@@ -10,3 +10,4 @@ pub mod mailbox;
 pub mod recovery;
 pub mod region_io;
 pub mod scheduler;
+pub mod shutdown;

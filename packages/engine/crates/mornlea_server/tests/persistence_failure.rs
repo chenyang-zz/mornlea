@@ -62,3 +62,6 @@ mod source_mob_persistence;
 
 #[path = "persistence_failure/source_companion_persistence.rs"]
 mod source_companion_persistence;
+
+#[path = "persistence_failure/shutdown_family_flush.rs"]
+mod shutdown_family_flush;
