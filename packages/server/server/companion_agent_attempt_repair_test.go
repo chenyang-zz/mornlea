@@ -82,6 +82,39 @@ func TestCompanionPlannerIdentityMismatchFailsTaskAndClearsGate(t *testing.T) {
 	})
 }
 
+// The identity-mismatch failure is scoped to the current task: a command queued
+// behind it stays Queued, and the same tick's dispatchPlanning promotes it.
+func TestCompanionPlannerIdentityMismatchKeepsPendingCommandQueued(t *testing.T) {
+	_, definition, manager, outcome := repairPlanningOutcome(t)
+	slot := manager.slots[definition.ID]
+	model := newFakeCompanionModel(t, [3]int32{0, 1, 0})
+	model.holdRequests()
+	t.Cleanup(model.releaseRequests)
+	manager.replacePlannerForTest(t, model)
+	if !manager.enqueueCommand(definition, companion.TaskCommand("第二条"),
+		stopTestIssuer(integrationIdentity(0x71, "发令者"))) {
+		t.Fatal("enqueue second command failed")
+	}
+	outcome.result.SnapshotID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	manager.applyPlannerOutcome(outcome)
+	assertRepairIdentityMismatchFailed(t, manager, slot)
+	if depth := slot.queue.Len(); depth != 1 || len(slot.issuers) != 1 {
+		t.Fatalf("pending depth=%d issuers=%d, want the second command still Queued", depth, len(slot.issuers))
+	}
+
+	// Same tick order as advanceCompanionTasks: outcomes apply, then dispatch.
+	manager.dispatchPlanning()
+	current, ok := slot.queue.Current()
+	if !ok || current.Command != companion.TaskCommand("第二条") ||
+		current.State != companion.TaskPlanning || !slot.planningInFlight {
+		t.Fatalf("current=%+v ok=%v inFlight=%v, want the second command planning in the same tick",
+			current, ok, slot.planningInFlight)
+	}
+	if facts := manager.takeEventFacts(); len(facts) != 0 {
+		t.Fatalf("promoting the second command produced task events: %+v", facts)
+	}
+}
+
 func repairPlanningOutcome(t *testing.T) (*Host, companion.Definition, *companionManager, plannerOutcome) {
 	t.Helper()
 	host, definition := newAgentRevalidationHost(t)

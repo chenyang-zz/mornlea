@@ -1483,8 +1483,9 @@ func (p *identityMismatchPlanner) Plan(
 // the real tick loop: one companion's plan comes back with a mismatched bridge
 // identity while a second companion plans concurrently. The mismatched task must
 // end as TaskFailed(PlannerUnavailable), the planning gate must be released so
-// the next queued command dispatches on a later tick, and the other companion
-// must be untouched.
+// the next queued command dispatches under normal eligibility (in the same tick,
+// since dispatch runs after outcomes apply), and the other companion must be
+// untouched.
 func TestCompanionManagerIdentityMismatchFailsOnlyCurrentTaskAndAdvancesFIFO(t *testing.T) {
 	definitions := []companion.Definition{
 		{ID: chatTestCompanionID(1), Name: "阿木"},
