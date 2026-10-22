@@ -33,9 +33,13 @@ enforced by `runtime::config::tests::dependency_direction_forbids_runtime_import
 `runtime::config` freezes the `ai` group into `AiConfig` only when at least one
 companion is configured (ids, names, endpoint, credential variable name, and
 `taskTimeoutMinutes`, default 10); acceptance is unchanged and still pinned by
-the shared parity fixtures. Persona text is not frozen. The frozen timeout
-reaches the core task runner as a bare `u32` of minutes through
-`install_companion_chat_plan_with_timeout`; deadline arithmetic lives in core.
+the shared parity fixtures. Persona text is not frozen. The frozen timeout is
+a `core::companion_runner::TaskTimeoutMinutes` (only 1..=60, as Go
+`config.go` validates) and travels `AiConfig` -> `CompanionRuntime` ->
+`runtime::tick_loop::TickStartup` -> `ServerTick` -> `CompanionPlanLoop::new`,
+which stamps it through `install_companion_chat_plan_with_timeout`; nothing
+can change it after startup. Deadline arithmetic lives in core, and the task
+start reads the same settled world clock the expiry check reads.
 
 `runtime::companion::start_companions` mirrors the Go `NewHost` companion
 bootstrap against the world store before it moves into the scheduler and an
@@ -53,8 +57,13 @@ Python is never launched here. Planning snapshots and outcome install are
 accepted library capabilities; the task runner (go_to, follow, and the
 mine/place interaction executor), its timeout, and companion path requests
 live in `core/companion_runner.rs` with the pending path plumbing in
-`runtime/companion_runner.rs`, but the production plan loop that drives them
-is not assembled yet; persona stays with the dialogue work. The interaction
+`runtime/companion_runner.rs`. `runtime::tick_loop::ServerTick::step` is the
+single production tick: it drives the plan loop once (which drives the
+runners), submits the runner actions through the core
+`submit_runner_actions` fence (core mints the envelopes and applies the same
+companion validation as every other input), then calls `advance_tick`, whose
+reduction publishes into the session outboxes. The 20 TPS pacing loop around
+it is not assembled yet; persona stays with the dialogue work. The interaction
 executor only chooses mine hold/release and place actions and reads their
 settled results; reach, mineability, break timing, product crediting, and
 placement validity stay with the authority mining and placement providers.

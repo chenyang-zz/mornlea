@@ -20,7 +20,8 @@
 //! cannot serve the request target fails on the lease worker instead.
 //!
 //! The per-tick plan loop (planning snapshot, outcome install, task runner,
-//! task timeout) is not assembled here.
+//! task timeout) is assembled by `tick_loop`, which reads the frozen
+//! timeout from this runtime once at startup.
 
 use std::fmt;
 use std::net::TcpListener;
@@ -41,6 +42,7 @@ use crate::contracts::{
     ServerError,
 };
 use crate::core::anchor_body;
+use crate::core::companion_runner::TaskTimeoutMinutes;
 use crate::state::AuthorityState;
 
 /// Bound for retiring Agent services after a failed startup or on drop.
@@ -203,7 +205,7 @@ impl Drop for AgentServices {
 /// Configured companion runtime after a successful startup.
 pub struct CompanionRuntime {
     definitions: Vec<(CompanionId, CompanionName)>,
-    task_timeout_minutes: u32,
+    task_timeout_minutes: TaskTimeoutMinutes,
     agent: AgentServices,
 }
 
@@ -213,8 +215,9 @@ impl CompanionRuntime {
         &self.definitions
     }
 
-    /// Frozen task timeout in minutes; no task runner consumes it yet.
-    pub fn task_timeout_minutes(&self) -> u32 {
+    /// Task timeout frozen at startup from `AiConfig`; the tick assembly
+    /// reads it once and hands it to the plan loop by value.
+    pub fn task_timeout_minutes(&self) -> TaskTimeoutMinutes {
         self.task_timeout_minutes
     }
 
