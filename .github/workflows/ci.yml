@@ -37,6 +37,13 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.12.5'
+          enable-cache: true
+          cache-dependency-glob: |
+            packages/audit/pyproject.toml
+            packages/audit/uv.lock
       - name: Install policy dependencies
         run: |
           sudo apt-get update
@@ -61,10 +68,13 @@ jobs:
         run: echo "CI_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       # Bootstrap the packageManager-pinned pnpm before setup-node resolves its cache.
+      # setup-node probes `pnpm store path` from the repository root, outside the
+      # pinned project, so make the pinned version Corepack's global default too.
       - name: Enable Corepack pnpm
         run: |
           corepack enable
           cd packages/engine/crates/mornlea_client/frontend
+          corepack install --global "$(node -p 'require("./package.json").packageManager')"
           corepack pnpm --version
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -230,6 +240,13 @@ jobs:
             packages/tools/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.12.5'
+          enable-cache: true
+          cache-dependency-glob: |
+            packages/audit/pyproject.toml
+            packages/audit/uv.lock
       - name: Install policy dependencies
         run: |
           sudo apt-get update
@@ -300,6 +317,13 @@ jobs:
             packages/tools/go.sum
             packages/engine/include/mornlea_engine.h
             packages/engine/include/mornlea_client.h
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.12.5'
+          enable-cache: true
+          cache-dependency-glob: |
+            packages/audit/pyproject.toml
+            packages/audit/uv.lock
       - name: Install policy dependencies
         run: |
           sudo apt-get update
