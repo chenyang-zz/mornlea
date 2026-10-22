@@ -50,10 +50,14 @@ loopback `McpService` start, and only then does `enable_companion_persistence`
 receive the aggregate. Any failure retires what already started. A refused
 lease acquire stays on the control worker and never blocks startup or a tick.
 Python is never launched here. Planning snapshots and outcome install are
-accepted library capabilities; the go_to/follow task runner, its timeout, and
-companion path requests live in `core/companion_runner.rs` with the pending
-path plumbing in `runtime/companion_runner.rs`, but the production plan loop
-that drives them is not assembled yet; persona stays with the dialogue work.
+accepted library capabilities; the task runner (go_to, follow, and the
+mine/place interaction executor), its timeout, and companion path requests
+live in `core/companion_runner.rs` with the pending path plumbing in
+`runtime/companion_runner.rs`, but the production plan loop that drives them
+is not assembled yet; persona stays with the dialogue work. The interaction
+executor only chooses mine hold/release and place actions and reads their
+settled results; reach, mineability, break timing, product crediting, and
+placement validity stay with the authority mining and placement providers.
 
 Core has no non-Overworld companion yet. When companions are configured, a
 non-Overworld spawn dimension refuses startup with the typed
