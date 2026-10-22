@@ -27,6 +27,7 @@ use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
     CompanionRuntime, CompanionStartError, CompanionStartupPorts, SystemClock, start_companions,
 };
+use mornlea_server::runtime::tick_loop::{ServerTick, TickStartup};
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
 use mornlea_server::store::io::{DiskIo, IoPhase};
@@ -467,6 +468,10 @@ fn two_configured_companions_restore_from_v5_save_and_activate_on_first_tick() {
         vec![(companion(1), "Mira".into()), (companion(2), "Tove".into())]
     );
     assert_eq!(runtime.task_timeout_minutes().get(), 7);
+    // The configured timeout reaches the tick assembly frozen at startup.
+    let startup = TickStartup::for_companions(&runtime, TickBudget::full());
+    assert_eq!(startup.task_timeout().get(), 7);
+    assert_eq!(ServerTick::new(startup, Vec::new()).task_timeout().get(), 7);
     assert_eq!(
         runtime.agent().namespace().bytes(),
         aggregate.agent_namespace_id.to_bytes()
