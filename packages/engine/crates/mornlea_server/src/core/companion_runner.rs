@@ -99,6 +99,15 @@ pub fn plan_follow_tail(steps: &[PlanStep]) -> bool {
     matches!(steps.last(), Some(PlanStep::Follow { .. }))
 }
 
+/// What one runner action submission did, in pass order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunnerSubmission {
+    /// Companions whose action was queued for the next tick.
+    pub admitted: Vec<CompanionId>,
+    /// Companions whose action the ordinary checks refused, with the reason.
+    pub refused: Vec<(CompanionId, ServerError)>,
+}
+
 /// A path outcome delivered at a tick boundary. Both search failures
 /// (unreachable and budget exhausted) share this one failure form,
 /// matching the Go runner, which handles them identically.

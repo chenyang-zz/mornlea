@@ -45,7 +45,8 @@ use super::companion_chat::{
 };
 use super::companion_runner::{
     CompanionPathOutcome, CompanionPathRequest, CompanionRunnerOutput, FollowObservation,
-    InteractionObservation, MiningObservation, RunnerEffect, RunnerTick, TaskRunner,
+    InteractionObservation, MiningObservation, RunnerEffect, RunnerSubmission, RunnerTick,
+    TaskRunner,
 };
 use super::container_store::ContainerState;
 use super::contracts::*;
@@ -246,6 +247,9 @@ pub struct AuthorityState {
     commands: Vec<CommandEnvelope>,
     companions: Vec<QueuedCompanion>,
     companion_arrival: BTreeMap<mornlea_domain::CompanionId, u64>,
+    /// Serial behind the provenance identities core mints for task runner
+    /// actions; it only ever increases.
+    runner_action_serial: u64,
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
     acquisition: AcquisitionState,
@@ -351,6 +355,7 @@ impl AuthorityState {
             commands,
             companions: Vec::new(),
             companion_arrival: BTreeMap::new(),
+            runner_action_serial: 0,
             interactions: Vec::new(),
             chunk_results: Vec::new(),
             acquisition: AcquisitionState::default(),
@@ -690,6 +695,73 @@ impl AuthorityState {
             envelope: candidate,
         });
         Ok(CompanionReceipt::new(self.next_tick, next))
+    }
+
+    /// Submits the actions one task runner pass emitted, in pass order.
+    ///
+    /// Core owns the envelope: the generation is the companion's running
+    /// task generation, the tick is the next executable tick, and the
+    /// provenance identities are minted from a core serial (they name the
+    /// runner, never an Agent request), so the same pass always produces
+    /// the same envelopes. Every envelope goes through the checked
+    /// constructor and [`Self::submit_companion`], the same generation
+    /// fence, duplicate check and per-companion inbox bound as any other
+    /// companion action; there is no side path into the tick. A per-action
+    /// refusal is reported and skipped, the way the Go engine inbox drops
+    /// an action it cannot take; an authority that is not Running refuses
+    /// the whole call unchanged before anything is queued.
+    pub fn submit_runner_actions(
+        &mut self,
+        actions: Vec<(CompanionId, CompanionAction)>,
+    ) -> Result<RunnerSubmission, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        let mut submission = RunnerSubmission::default();
+        for (companion, action) in actions {
+            let generation = self
+                .companion_chat
+                .current_task(companion)
+                .map_or(0, |current| current.generation);
+            let envelope = self.runner_envelope(companion, generation, action);
+            match envelope.and_then(|envelope| self.submit_companion(envelope)) {
+                Ok(_) => submission.admitted.push(companion),
+                Err(error @ ServerError::InvalidState { .. }) => return Err(error),
+                Err(error) => submission.refused.push((companion, error)),
+            }
+        }
+        Ok(submission)
+    }
+
+    /// Builds one runner action envelope with core-minted provenance.
+    fn runner_envelope(
+        &mut self,
+        companion: CompanionId,
+        generation: u64,
+        action: CompanionAction,
+    ) -> Result<CompanionActionEnvelope, ServerError> {
+        // Version-4 shaped bytes: a fixed kind tag in the first byte, the
+        // version and variant bits in place, and the value in the tail.
+        fn runner_uuid(kind: u8, value: u64) -> [u8; 16] {
+            let mut bytes = [0u8; 16];
+            bytes[0] = kind;
+            bytes[6] = 0x40;
+            bytes[8..16].copy_from_slice(&value.to_be_bytes());
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            bytes
+        }
+        self.runner_action_serial = self.runner_action_serial.saturating_add(1);
+        CompanionActionEnvelope::try_new(
+            companion,
+            self.next_tick,
+            AgentRequestId::try_from_bytes(runner_uuid(0x52, self.runner_action_serial))?,
+            RunId::try_from_bytes(runner_uuid(0x72, generation))?,
+            SnapshotId::try_from_bytes(runner_uuid(0x73, generation))?,
+            generation,
+            1,
+            [0; 32],
+            action,
+        )
     }
 
     pub(crate) fn tick_failure(&self) -> Option<ServerError> {
