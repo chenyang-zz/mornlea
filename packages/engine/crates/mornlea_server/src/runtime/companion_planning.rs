@@ -888,18 +888,13 @@ mod tests {
         let mut plan_loop = CompanionPlanLoop::new();
         let mut rig = Rig::new();
         let mut pending = PendingCompanionPaths::new();
-        // The fixture's world time is a large sentinel and its install
-        // start tick is the completed-tick count, so this test uses a
-        // timeout whose deadline clears that sentinel; the arithmetic
-        // assertion below still pins minutes x 1200 exactly.
-        const BIG_TIMEOUT: u32 = 2_000_000_000;
         drive(
             &mut plan_loop,
             &mut fixture.authority,
             &[id],
             &mut pending,
             &mut rig,
-            BIG_TIMEOUT,
+            7,
         )
         .unwrap();
         let request = rig.agent.plan_requests()[0].clone();
@@ -910,7 +905,7 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            BIG_TIMEOUT,
+            7,
         )
         .unwrap();
         assert_eq!(report.installed, vec![id]);
@@ -920,10 +915,7 @@ mod tests {
         );
         // Deadline stamped at Running entry from the bare frozen minutes.
         let stored = stored_task(&fixture.authority, id);
-        assert_eq!(
-            stored.deadline_ticks,
-            stored.start_tick + u64::from(BIG_TIMEOUT) * 1200
-        );
+        assert_eq!(stored.deadline_ticks, stored.start_tick + 7 * 1200);
         assert_ne!(stored.start_tick, 0);
         // The runner issued its path search this pass; the outcome lands
         // no earlier than the next pass, which completes the go_to.
@@ -937,7 +929,7 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            BIG_TIMEOUT,
+            7,
         )
         .unwrap();
         assert_eq!(
@@ -952,7 +944,7 @@ mod tests {
             &[id],
             &mut pending,
             &mut rig,
-            BIG_TIMEOUT,
+            7,
         )
         .unwrap();
         assert!(

@@ -1756,12 +1756,9 @@ impl AuthorityState {
         else {
             return Ok(false);
         };
-        let start_tick = self
-            .residents
-            .environment
-            .as_ref()
-            .map(|environment| environment.world_time)
-            .unwrap_or(self.next_tick);
+        // The start tick reads the settled world clock the expiry check
+        // reads, so stamping and expiry can never disagree.
+        let start_tick = self.settled_read()?.world_time();
         let deadline_ticks = timeout_minutes.map(|minutes| {
             super::companion_runner::task_deadline_ticks(
                 start_tick,
@@ -19848,6 +19845,71 @@ mod companion_chat_boundary_tests {
         assert_eq!(task.state, COMPANION_TASK_RUNNING);
         assert_eq!(task.start_tick, world_time);
         assert_eq!(task.deadline_ticks, 0, "follow-tail plan stays exempt");
+    }
+
+    /// The Running-entry start tick reads the same settled world time the
+    /// expiry check reads, as Go stamps and expires on one world clock.
+    /// Before the first tick freezes an environment the settled clock is
+    /// the metadata world time, never the completed-tick count, so a task
+    /// installed then neither expires on its first pass nor runs long.
+    #[test]
+    fn runner_install_start_tick_reads_the_expiry_clock() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.residents.environment = None;
+        a.metadata.world_time_ticks = 50_000;
+        a.next_tick = 7;
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let expiry_clock = a.settled_read().unwrap().world_time();
+        assert_eq!(expiry_clock, 50_000);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
+                .unwrap()
+        );
+        let task = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(task.start_tick, expiry_clock);
+        assert_eq!(
+            task.deadline_ticks,
+            expiry_clock + super::super::companion_runner::TICKS_PER_MINUTE
+        );
+        // The first runner pass on the same clock leaves the task running.
+        a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
+        assert!(
+            !a.take_decided_chat_facts().iter().any(|fact| matches!(
+                fact.body,
+                ChatBody::Task {
+                    state: TaskState::TimedOut,
+                    ..
+                }
+            )),
+            "no timeout on the install clock"
+        );
     }
 
     /// A go-to install stamps the real deadline, and expiry finishes
