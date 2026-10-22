@@ -4,7 +4,6 @@
 //! placement providers settle them. The scenarios mirror the Go
 //! interaction tests in `packages/server/server/companion_interact_test.go`.
 
-use super::super::companion_chat::CompanionChatBook;
 use super::super::companion_runner::{CompanionPathOutcome, PathOutcome};
 use super::super::world::PreparedChunk;
 use super::*;
@@ -25,6 +24,9 @@ const DIRT: u16 = 3;
 const AIR: u16 = 0;
 const ITEM_STONE: u16 = 1;
 const ITEM_DIRT: u16 = 2;
+const ITEM_COAL: u16 = 5;
+const ITEM_STONE_PICKAXE: u16 = 10;
+const COAL_ORE: u16 = 7;
 
 fn raw(tag: u8) -> [u8; 16] {
     let mut bytes = [0u8; 16];
@@ -77,23 +79,17 @@ fn floor_chunk(blocks: &[(i32, i32, i32, u16)]) -> Chunk {
     chunk
 }
 
-/// Live authority with the 3x3 chunks around the origin chunk Ready; the
-/// origin chunk carries the listed blocks.
-/// Chat configuration is sealed after the first tick, so the companions
-/// are configured before any chunk load settles.
-fn world(
-    blocks: &[(i32, i32, i32, u16)],
-    definitions: &[(CompanionId, CompanionName)],
-) -> AuthorityState {
-    let mut a = AuthorityState::try_new(
+fn new_authority() -> AuthorityState {
+    AuthorityState::try_new(
         ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
         42,
     )
-    .unwrap();
-    if !definitions.is_empty() {
-        a.configure_companion_chat(definitions).unwrap();
-    }
-    a.enable_live_chunks().unwrap();
+    .unwrap()
+}
+
+/// Loads the 3x3 chunks around the origin chunk as Ready, each body and
+/// revision supplied by `chunk`.
+fn load_window(a: &mut AuthorityState, chunk: impl Fn(ChunkKey) -> (Chunk, u64)) {
     let keys: BTreeSet<ChunkKey> = (-1..=1)
         .flat_map(|x| (-1..=1).map(move |z| chunk_key(x, z)))
         .collect();
@@ -102,18 +98,14 @@ fn world(
         let reservation = a.reserve_chunk_load(key).unwrap();
         let request = ChunkRequestId::try_new(index as u64 + 1).unwrap();
         a.bind_chunk_load(reservation, request).unwrap();
-        let body = if key.pos == ChunkPos::new(0, 0) {
-            floor_chunk(blocks)
-        } else {
-            floor_chunk(&[])
-        };
+        let (body, revision) = chunk(key);
         let prepared = PreparedChunk::try_new(
             key,
             reservation.generation(),
             RecoveredChunk {
                 chunk: body,
-                revision: 9,
-                persisted_revision: 9,
+                revision,
+                persisted_revision: revision,
                 needs_rewrite: false,
                 recovered: false,
             },
@@ -132,6 +124,32 @@ fn world(
         }
     }
     a.advance_tick(TickBudget::full()).unwrap();
+}
+
+fn floor_window(blocks: &[(i32, i32, i32, u16)]) -> impl Fn(ChunkKey) -> (Chunk, u64) + '_ {
+    move |key| {
+        if key.pos == ChunkPos::new(0, 0) {
+            (floor_chunk(blocks), 9)
+        } else {
+            (floor_chunk(&[]), 9)
+        }
+    }
+}
+
+/// Live authority with the 3x3 chunks around the origin chunk Ready; the
+/// origin chunk carries the listed blocks. Chat configuration is sealed
+/// after the first tick, so the companions are configured before any
+/// chunk load settles.
+fn world(
+    blocks: &[(i32, i32, i32, u16)],
+    definitions: &[(CompanionId, CompanionName)],
+) -> AuthorityState {
+    let mut a = new_authority();
+    if !definitions.is_empty() {
+        a.configure_companion_chat(definitions).unwrap();
+    }
+    a.enable_live_chunks().unwrap();
+    load_window(&mut a, floor_window(blocks));
     a
 }
 
@@ -266,7 +284,7 @@ fn full_of_stone() -> InventoryRecord {
 /// A Ready world with the companions placed and configured for chat.
 struct Harness {
     a: AuthorityState,
-    session: SessionKey,
+    session: Option<SessionKey>,
     pending: Vec<CompanionPathOutcome>,
     next_request: u32,
     facts: Vec<DecidedChatFact>,
@@ -279,7 +297,7 @@ impl Harness {
     ) -> Self {
         let definitions: Vec<_> = companions.iter().map(|(def, _, _)| def.clone()).collect();
         let mut a = world(blocks, &definitions);
-        let session = logged(&mut a);
+        let session = Some(logged(&mut a));
         for ((id, _), position, inventory) in companions {
             add_companion(&mut a, *id, *position, *inventory);
             a.residents
@@ -298,7 +316,10 @@ impl Harness {
     /// Issues a chat command and installs the plan as the running task.
     fn run_plan(&mut self, name: &str, id: CompanionId, steps: Vec<PlanStep>, minutes: u32) {
         self.a
-            .submit(self.session, chat(&format!("@{name} work")))
+            .submit(
+                self.session.expect("a logged issuer"),
+                chat(&format!("@{name} work")),
+            )
             .unwrap();
         self.a.prepare_companion_chat().unwrap();
         let planning = self
@@ -844,34 +865,270 @@ fn timeout_during_place_is_timed_out_with_inventory_identical() {
     assert_eq!(h.inventory(id), inventory);
 }
 
-/// Saves the running task and rebuilds an authority from what persists:
-/// the world blocks, the inventory, and the stored running task. The
-/// runner, the mining progress, and the queued envelopes are process
-/// memory and do not survive.
-fn restore(
-    h: &Harness,
-    id: CompanionId,
-    name: CompanionName,
-    blocks: &[(i32, i32, i32, u16)],
-) -> Harness {
-    assert_eq!(h.stored(id).state, COMPANION_TASK_RUNNING);
+/// A target emptied by another actor while progress sits two ticks short
+/// of the requirement is a world change, not a completion: only the last
+/// tick before settlement counts as evidence.
+#[test]
+fn target_emptied_two_ticks_short_fails_world_changed() {
+    let (id, name) = amu();
+    let mut h = Harness::new(
+        &[(10, 0, 8, DIRT)],
+        &[((id, name), [9.5, 0.0, 8.5], InventoryRecord::empty())],
+    );
+    h.run_plan("阿木", id, vec![mine(10, 0, 8)], 5);
+    let required = loop {
+        h.step();
+        if let Some(progress) = h.a.residents.mining.get(&ActorKey::Companion(id))
+            && progress.elapsed + 2 == progress.required
+        {
+            break progress.required;
+        }
+        assert!(h.running(id) && h.block(pos(10, 0, 8)) == Some(DIRT));
+    };
+    assert!(required >= 3, "dirt needs several ticks by hand");
+    // The runner records this progress on its next pass, then the block
+    // is gone before the settlement tick.
+    set_block(&mut h.a, pos(10, 0, 8), AIR);
+    h.run_to_end(id, 60);
+    let stored = h.stored(id);
+    assert_eq!(stored.state, COMPANION_TASK_FAILED);
+    assert_eq!(stored.fail_reason, COMPANION_TASK_FAIL_WORLD_CHANGED);
+    assert_eq!(
+        h.inventory(id),
+        InventoryRecord::empty(),
+        "nothing credited"
+    );
+    assert_eq!(
+        h.task_facts(id).last(),
+        Some(&TaskState::Failed(TaskFailure::WorldChanged))
+    );
+}
+
+/// Two mine steps in a row: the second starts from its own approach and
+/// fresh progress memory, so both blocks are mined and both products kept.
+#[test]
+fn consecutive_mine_steps_each_start_fresh() {
+    let (id, name) = amu();
+    let mut h = Harness::new(
+        &[(10, 0, 8, DIRT), (10, 0, 6, DIRT)],
+        &[((id, name), [9.5, 0.0, 8.5], InventoryRecord::empty())],
+    );
+    h.run_plan("阿木", id, vec![mine(10, 0, 8), mine(10, 0, 6)], 5);
+    h.run_to_end(id, 300);
+    assert_eq!(h.stored(id).state, COMPANION_TASK_COMPLETED);
+    assert_eq!(h.block(pos(10, 0, 8)), Some(AIR));
+    assert_eq!(h.block(pos(10, 0, 6)), Some(AIR));
+    assert_eq!(total(&h.inventory(id), ITEM_DIRT), 2);
+    assert_eq!(
+        h.task_facts(id),
+        vec![
+            TaskState::Started,
+            TaskState::Progress,
+            TaskState::Completed
+        ]
+    );
+}
+
+/// Holding only other items is the same as holding nothing for the
+/// planned block: the task fails inventory full at once, without
+/// submitting placements that would be refused until the deadline.
+#[test]
+fn place_without_the_planned_item_fails_inventory_full() {
+    let (id, name) = amu();
+    let inventory = inventory_with(&[(0, stack(ITEM_STONE, 5)), (12, stack(ITEM_STONE, 64))]);
+    let mut h = Harness::new(&[], &[((id, name), [9.5, 0.0, 8.5], inventory)]);
+    h.run_plan("阿木", id, vec![place(10, 0, 8)], 5);
+    let ticks = h.run_to_end(id, 60);
+    assert!(
+        ticks < 10,
+        "fails promptly, not at the deadline ({ticks} ticks)"
+    );
+    let stored = h.stored(id);
+    assert_eq!(stored.state, COMPANION_TASK_FAILED);
+    assert_eq!(stored.fail_reason, COMPANION_TASK_FAIL_INVENTORY_FULL);
+    assert_eq!(h.inventory(id), inventory, "inventory byte-identical");
+    assert_eq!(h.block(pos(10, 0, 8)), Some(AIR));
+    assert_eq!(
+        h.task_facts(id).last(),
+        Some(&TaskState::Failed(TaskFailure::InventoryFull))
+    );
+}
+
+/// Mirrors `TestCompanionManagerMineCompletesWithEventsAndLoot` exactly:
+/// a stone pickaxe mines coal ore, the coal lands in the inventory and
+/// the pickaxe wears by one.
+#[test]
+fn pickaxe_mines_coal_with_one_durability_of_wear() {
+    let (id, name) = amu();
+    let pickaxe = ItemStack {
+        item: ITEM_STONE_PICKAXE,
+        count: 1,
+        durability: 131,
+    };
+    let mut h = Harness::new(
+        &[(10, 0, 8, COAL_ORE)],
+        &[((id, name), [9.5, 0.0, 8.5], inventory_with(&[(0, pickaxe)]))],
+    );
+    h.run_plan("阿木", id, vec![mine(10, 0, 8)], 5);
+    h.run_to_end(id, 120);
+    assert_eq!(h.stored(id).state, COMPANION_TASK_COMPLETED);
+    assert_eq!(h.block(pos(10, 0, 8)), Some(AIR));
     let inventory = h.inventory(id);
-    let actor =
-        h.a.residents
+    assert_eq!(total(&inventory, ITEM_COAL), 1);
+    assert_eq!(
+        inventory.slots[0],
+        ItemStack {
+            durability: 130,
+            ..pickaxe
+        }
+    );
+    assert_eq!(
+        h.task_facts(id),
+        vec![TaskState::Started, TaskState::Completed]
+    );
+}
+
+/// Mirrors `TestCompanionManagerMineApproachesBeforeMining`: a target
+/// beyond reach is approached first, and mining starts only in reach.
+#[test]
+fn distant_target_is_approached_before_mining() {
+    let (id, name) = amu();
+    let start = [2.5, 0.0, 8.5];
+    let mut h = Harness::new(
+        &[(10, 0, 8, DIRT)],
+        &[((id, name), start, InventoryRecord::empty())],
+    );
+    h.run_plan("阿木", id, vec![mine(10, 0, 8)], 5);
+    let mut at_mining_start = None;
+    for _ in 0..300 {
+        if !h.running(id) {
+            break;
+        }
+        h.step();
+        if at_mining_start.is_none() && h.a.residents.mining.contains_key(&ActorKey::Companion(id))
+        {
+            at_mining_start = Some(
+                h.a.residents
+                    .actors
+                    .iter()
+                    .find(|actor| actor.key == ActorKey::Companion(id))
+                    .unwrap()
+                    .motion
+                    .position()
+                    .get(),
+            );
+        }
+    }
+    assert_eq!(h.stored(id).state, COMPANION_TASK_COMPLETED);
+    assert_eq!(h.block(pos(10, 0, 8)), Some(AIR));
+    let at = at_mining_start.expect("mining started");
+    let distance = |p: [f32; 3]| ((p[0] - 10.5).powi(2) + (p[2] - 8.5).powi(2)).sqrt();
+    assert!(distance(start) > 6.0, "the start is out of reach");
+    assert!(
+        distance(at) < 2.0,
+        "mining started next to the target at {at:?}"
+    );
+}
+
+/// Startup through the real companion persistence path: the aggregate is
+/// installed by `enable_companion_persistence` (chat book restore plus
+/// `source_companion_restore::prepare`), the chunks come from `chunk`, and
+/// the companion activates through the source restore scan.
+fn persisted(
+    definition: (CompanionId, CompanionName),
+    loaded: mornlea_storage::StoredCompanions,
+    chunk: impl Fn(ChunkKey) -> (Chunk, u64),
+) -> Harness {
+    let id = definition.0;
+    let mut a = new_authority();
+    a.enable_source_player_restoration(1).unwrap();
+    a.enable_live_chunks().unwrap();
+    a.enable_actor_saves().unwrap();
+    a.enable_player_persistence().unwrap();
+    a.enable_companion_persistence(&[definition], loaded)
+        .unwrap();
+    load_window(&mut a, chunk);
+    for _ in 0..20 {
+        if a.residents.actors.iter().any(|actor| {
+            actor.key == ActorKey::Companion(id) && actor.lifecycle == ActorLifecycle::Active
+        }) {
+            break;
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+    }
+    assert!(
+        a.residents
             .actors
             .iter()
-            .find(|actor| actor.key == ActorKey::Companion(id))
-            .unwrap();
-    let position = actor.motion.position().get();
-    let ActorBody::Companion(body) = &actor.body else {
-        unreachable!()
-    };
+            .any(|actor| actor.key == ActorKey::Companion(id)
+                && actor.lifecycle == ActorLifecycle::Active),
+        "the restored companion activates"
+    );
+    Harness {
+        a,
+        session: None,
+        pending: Vec::new(),
+        next_request: 0,
+        facts: Vec::new(),
+    }
+}
+
+fn storage_inventory(inventory: &InventoryRecord) -> mornlea_storage::Inventory {
+    let mut stored = mornlea_storage::Inventory::default();
+    stored.hotbar.selected = inventory.selected.get();
+    stored
+        .hotbar
+        .slots
+        .copy_from_slice(&inventory.slots[..mornlea_storage::HOTBAR_SLOTS]);
+    stored
+        .backpack
+        .copy_from_slice(&inventory.slots[mornlea_storage::HOTBAR_SLOTS..]);
+    stored
+}
+
+fn stored_step(step: &PlanStep) -> StoredPlanStep {
+    match *step {
+        PlanStep::Mine { x, y, z } => StoredPlanStep {
+            kind: COMPANION_PLAN_STEP_MINE,
+            x,
+            y,
+            z,
+            ..StoredPlanStep::default()
+        },
+        PlanStep::Place { x, y, z, block } => StoredPlanStep {
+            kind: COMPANION_PLAN_STEP_PLACE,
+            x,
+            y,
+            z,
+            block: super::super::companion_runner::plan_block_id(block),
+            ..StoredPlanStep::default()
+        },
+        _ => unreachable!("restore scenarios use mine and place steps"),
+    }
+}
+
+/// A first boot whose saved aggregate already carries a running task, so
+/// the task is owned by the persistence path from the start.
+fn first_boot(
+    blocks: &[(i32, i32, i32, u16)],
+    position: [f32; 3],
+    inventory: InventoryRecord,
+    steps: &[PlanStep],
+) -> Harness {
+    let (id, name) = amu();
     let raw_id = mornlea_storage::PlayerId::from_bytes(id.bytes());
-    let mut loaded = mornlea_storage::StoredCompanions {
+    let loaded = mornlea_storage::StoredCompanions {
         source_schema: 5,
-        revision: 1,
-        agent_namespace_id: raw_id,
-        records: vec![body.clone()],
+        revision: 9,
+        agent_namespace_id: mornlea_storage::PlayerId::from_bytes(raw(240)),
+        records: vec![mornlea_storage::CompanionBody {
+            id: raw_id,
+            dimension: 0,
+            position,
+            yaw: 0.0,
+            pitch: 0.0,
+            inventory: storage_inventory(&inventory),
+        }],
         lifecycles: vec![mornlea_storage::StoredCompanionLifecycle {
             id: raw_id,
             active: true,
@@ -881,74 +1138,121 @@ fn restore(
             summary: String::new(),
             tombstone_operation_id: Default::default(),
         }],
-        queues: Vec::new(),
+        queues: vec![mornlea_storage::StoredCompanionQueue {
+            id: raw_id,
+            has_current: true,
+            current: StoredCompanionTask {
+                command: "work".to_owned(),
+                state: COMPANION_TASK_RUNNING,
+                plan_steps: steps.iter().map(stored_step).collect(),
+                step_index: 0,
+                start_tick: 0,
+                deadline_ticks: 1_000_000,
+                fail_reason: COMPANION_TASK_FAIL_NONE,
+            },
+            pending: Vec::new(),
+            summary: String::new(),
+        }],
     };
-    // The running task is captured through the real save path.
-    loaded.queues =
-        h.a.companion_chat
-            .snapshot_persisted(&loaded, &h.a.residents.runtimes)
+    persisted((id, name), loaded, floor_window(blocks))
+}
+
+/// Saves through the real capture (`capture_companion_saves` into the
+/// actor save ledger, and the durable chunk snapshots) and boots a second
+/// authority from exactly those bytes. The runner, the mining progress
+/// and queued envelopes are process memory and do not survive.
+fn restart(h: &mut Harness) -> Harness {
+    let (id, name) = amu();
+    assert_eq!(h.stored(id).state, COMPANION_TASK_RUNNING);
+    h.a.capture_companion_saves().unwrap();
+    let (revision, value) =
+        h.a.actor_saves
+            .as_ref()
+            .unwrap()
+            .current(&SaveKey::Companions)
             .unwrap();
-    let mut a = world(blocks, &[]);
-    let session = logged(&mut a);
-    let (book, tasks) = CompanionChatBook::from_persisted(&[(id, name)], &loaded).unwrap();
-    a.companion_chat = book;
-    add_companion(&mut a, id, position, inventory);
-    let mut runtime = companion_runtime(id);
-    if let ActorAux::Companion {
-        generation, task, ..
-    } = &mut runtime.aux
-    {
-        *generation = tasks[&id].0;
-        *task = tasks[&id].1.clone();
+    let SaveValue::Companions(save) = value else {
+        unreachable!()
+    };
+    // Both saves cross their on-disk codecs, as a restart reads them.
+    let bytes = mornlea_storage::CompanionSave {
+        revision,
+        ..save.clone()
+    };
+    let loaded =
+        mornlea_storage::decode_companions(&mornlea_storage::encode_companions(&bytes).unwrap())
+            .unwrap();
+    assert_eq!(loaded.queues.len(), 1, "the running task is saved");
+    let chunks: BTreeMap<ChunkKey, (Chunk, u64)> = h
+        .a
+        .residents
+        .ready_snapshot()
+        .into_iter()
+        .map(|(key, _, revision, chunk)| {
+            let stored_key = mornlea_storage::ChunkKey {
+                dimension: i32::from(key.dimension.get()),
+                x: key.pos.x(),
+                z: key.pos.z(),
+            };
+            let encoded = mornlea_storage::encode_chunk(&mornlea_storage::ChunkSave {
+                key: stored_key,
+                revision,
+                chunk,
+            })
+            .unwrap();
+            let decoded = mornlea_storage::decode_chunk(stored_key, revision, &encoded).unwrap();
+            (key, (decoded.chunk, revision))
+        })
+        .collect();
+    persisted((id, name), loaded, |key| chunks[&key].clone())
+}
+
+/// Steps until the mining progress on the companion first appears and
+/// returns its elapsed ticks.
+fn first_progress(h: &mut Harness, id: CompanionId) -> u32 {
+    for _ in 0..30 {
+        h.step();
+        if let Some(progress) = h.a.residents.mining.get(&ActorKey::Companion(id)) {
+            return progress.elapsed;
+        }
     }
-    a.residents
-        .runtimes
-        .insert(ActorKey::Companion(id), runtime);
-    Harness {
-        a,
-        session,
-        pending: Vec::new(),
-        next_request: 0,
-        facts: Vec::new(),
-    }
+    panic!("mining never started");
 }
 
 /// Restoring mid-mine re-approaches and mines from zero progress: the
-/// block yields exactly one product across the restore.
+/// saved progress is not carried, and the block yields exactly one
+/// product across the restart.
 #[test]
 fn restore_mid_mine_restarts_and_credits_exactly_once() {
-    let (id, name) = amu();
-    let mut h = Harness::new(
+    let id = amu().0;
+    let steps = [mine(10, 0, 8)];
+    let mut h = first_boot(
         &[(10, 0, 8, DIRT)],
-        &[(
-            (id, name.clone()),
-            [9.5, 0.0, 8.5],
-            inventory_with(&[(0, stack(ITEM_DIRT, 1))]),
-        )],
+        [9.5, 0.0, 8.5],
+        inventory_with(&[(0, stack(ITEM_DIRT, 1))]),
+        &steps,
     );
-    h.run_plan("阿木", id, vec![mine(10, 0, 8)], 5);
-    for _ in 0..30 {
+    assert_eq!(first_progress(&mut h, id), 1);
+    for _ in 0..2 {
         h.step();
-        if h.a
-            .residents
-            .mining
-            .get(&ActorKey::Companion(id))
-            .is_some_and(|progress| progress.elapsed >= 2)
-        {
-            break;
-        }
     }
+    let saved_progress = h.a.residents.mining[&ActorKey::Companion(id)].elapsed;
+    assert!(saved_progress >= 2, "saved mid-mine at {saved_progress}");
     assert_eq!(
         h.block(pos(10, 0, 8)),
         Some(DIRT),
         "saved before settlement"
     );
-    let mut restored = restore(&h, id, name, &[(10, 0, 8, DIRT)]);
-    assert!(restored.a.residents.mining.is_empty());
+    let mut restored = restart(&mut h);
     restored.step();
     assert!(
         !restored.a.companion_runners[&id].interaction_ready(),
         "a restored interaction starts from its approach"
+    );
+    assert_eq!(
+        first_progress(&mut restored, id),
+        1,
+        "mining restarts from zero, not from the saved {saved_progress}"
     );
     restored.run_to_end(id, 60);
     assert_eq!(restored.stored(id).state, COMPANION_TASK_COMPLETED);
@@ -962,16 +1266,13 @@ fn restore_mid_mine_restarts_and_credits_exactly_once() {
 /// Go does; the credited product is kept exactly once.
 #[test]
 fn restore_after_mine_settled_fails_world_changed_without_losing_the_product() {
-    let (id, name) = amu();
-    let mut h = Harness::new(
+    let id = amu().0;
+    let mut h = first_boot(
         &[(10, 0, 8, DIRT)],
-        &[(
-            (id, name.clone()),
-            [9.5, 0.0, 8.5],
-            InventoryRecord::empty(),
-        )],
+        [9.5, 0.0, 8.5],
+        InventoryRecord::empty(),
+        &[mine(10, 0, 8)],
     );
-    h.run_plan("阿木", id, vec![mine(10, 0, 8)], 5);
     for _ in 0..30 {
         h.step();
         if h.block(pos(10, 0, 8)) == Some(AIR) {
@@ -983,7 +1284,12 @@ fn restore_after_mine_settled_fails_world_changed_without_losing_the_product() {
         h.running(id),
         "saved before the runner observed the settlement"
     );
-    let mut restored = restore(&h, id, name, &[]);
+    let mut restored = restart(&mut h);
+    assert_eq!(
+        restored.block(pos(10, 0, 8)),
+        Some(AIR),
+        "the chunk save kept the break"
+    );
     restored.run_to_end(id, 60);
     let stored = restored.stored(id);
     assert_eq!(stored.state, COMPANION_TASK_FAILED);
@@ -996,16 +1302,13 @@ fn restore_after_mine_settled_fails_world_changed_without_losing_the_product() {
 /// from the observed block without placing or debiting again.
 #[test]
 fn restore_after_place_settled_completes_without_a_second_debit() {
-    let (id, name) = amu();
-    let mut h = Harness::new(
+    let id = amu().0;
+    let mut h = first_boot(
         &[],
-        &[(
-            (id, name.clone()),
-            [9.5, 0.0, 8.5],
-            inventory_with(&[(0, stack(ITEM_DIRT, 3))]),
-        )],
+        [9.5, 0.0, 8.5],
+        inventory_with(&[(0, stack(ITEM_DIRT, 3))]),
+        &[place(10, 0, 8)],
     );
-    h.run_plan("阿木", id, vec![place(10, 0, 8)], 5);
     for _ in 0..30 {
         h.step();
         if h.block(pos(10, 0, 8)) == Some(DIRT) {
@@ -1014,8 +1317,171 @@ fn restore_after_place_settled_completes_without_a_second_debit() {
     }
     assert!(h.running(id));
     assert_eq!(h.inventory(id).slots[0], stack(ITEM_DIRT, 2));
-    let mut restored = restore(&h, id, name, &[(10, 0, 8, DIRT)]);
+    let mut restored = restart(&mut h);
+    assert_eq!(restored.inventory(id).slots[0], stack(ITEM_DIRT, 2));
     restored.run_to_end(id, 60);
     assert_eq!(restored.stored(id).state, COMPANION_TASK_COMPLETED);
+    assert_eq!(restored.block(pos(10, 0, 8)), Some(DIRT));
     assert_eq!(restored.inventory(id).slots[0], stack(ITEM_DIRT, 2));
+}
+
+/// A player-mining target out of the companion's way: the player stands
+/// at (3.5, 0, 3.5) and looks along +Z and down into (3, 0, 5).
+const PLAYER_TARGET: (i32, i32, i32, u16) = (3, 0, 5, STONE);
+
+/// A harness with one restored, Active player holding the primary action
+/// on stone, beside the configured companion.
+fn with_mining_player(
+    companion: ((CompanionId, CompanionName), [f32; 3], InventoryRecord),
+) -> Harness {
+    let mut a = new_authority();
+    a.configure_companion_chat(std::slice::from_ref(&companion.0))
+        .unwrap();
+    a.enable_source_player_restoration(1).unwrap();
+    a.enable_live_chunks().unwrap();
+    let player =
+        PlayerId::try_from_bytes([1, 0, 0, 0, 0, 0, 64, 0, 128, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+    let start = mornlea_protocol::LoginStart::new(player, "Ada", 8).unwrap();
+    let login = mornlea_protocol::admit_login(
+        mornlea_protocol::LoginStart::decode_inbound(&start.encode().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let session = a.prepare(login, TransportKind::Memory).unwrap();
+    let mut save = canonical_player(player, "Ada").unwrap();
+    save.current = PlayerLocation {
+        dimension: 0,
+        position: [3.5, 0.0, 3.5],
+    };
+    save.inventory.hotbar.slots[4] = stack(ITEM_DIRT, 9);
+    save.inventory.backpack[2] = stack(ITEM_STONE, 3);
+    a.install(
+        session,
+        Some(StoredPlayer {
+            player_id: save.player_id,
+            revision: save.revision,
+            display_name: save.display_name,
+            current: save.current,
+            yaw: save.yaw,
+            pitch: save.pitch,
+            safe: save.safe,
+            inventory: save.inventory,
+            health: save.health,
+            hunger: save.hunger,
+            saturation_milli: save.saturation_milli,
+            exhaustion_milli: save.exhaustion_milli,
+            respawn_present: save.respawn_present,
+            respawn_position: save.respawn_position,
+            respawn_dimension: save.respawn_dimension,
+            armor: save.armor,
+            needs_rewrite: false,
+        }),
+    )
+    .unwrap();
+    a.activate(session).unwrap();
+    load_window(&mut a, floor_window(&[PLAYER_TARGET]));
+    let (id, _) = companion.0;
+    add_companion(&mut a, id, companion.1, companion.2);
+    a.residents
+        .runtimes
+        .insert(ActorKey::Companion(id), companion_runtime(id));
+    let key = ActorKey::Player(session);
+    for _ in 0..20 {
+        if a.residents
+            .actors
+            .iter()
+            .any(|actor| actor.key == key && actor.lifecycle == ActorLifecycle::Active)
+        {
+            break;
+        }
+        a.advance_tick(TickBudget::full()).unwrap();
+    }
+    let look = LookAngles::try_new(std::f32::consts::PI, (-1.12f32).atan2(2.0)).unwrap();
+    let control = mornlea_domain::PlayerControl::new(mornlea_domain::PlayerControlParts {
+        movement: mornlea_domain::Movement {
+            move_x: 0,
+            move_z: 0,
+            jump: false,
+        },
+        look,
+        actions: mornlea_domain::HeldActions {
+            primary: true,
+            eating: false,
+            sprinting: false,
+            sneaking: false,
+        },
+    });
+    a.submit(
+        session,
+        PlayIntent::Sequenced {
+            sequence: 1,
+            command: mornlea_domain::Command::PlayerInput(control),
+        },
+    )
+    .unwrap();
+    Harness {
+        a,
+        session: Some(session),
+        pending: Vec::new(),
+        next_request: 0,
+        facts: Vec::new(),
+    }
+}
+
+/// What the companion must never touch on the player: inventory, pose and
+/// in-progress mining.
+fn player_state(h: &Harness) -> (InventoryRecord, [f32; 3], Option<MiningProgress>) {
+    let key = ActorKey::Player(h.session.unwrap());
+    let actor =
+        h.a.residents
+            .actors
+            .iter()
+            .find(|actor| actor.key == key)
+            .expect("player actor");
+    assert_eq!(actor.lifecycle, ActorLifecycle::Active);
+    (
+        h.a.residents.inventories[&key],
+        actor.motion.position().get(),
+        h.a.residents.mining.get(&key).cloned(),
+    )
+}
+
+/// A companion's failed placement leaves a player mining in the same
+/// ticks exactly as a control run without the companion task does.
+#[test]
+fn companion_failure_leaves_a_mining_player_untouched() {
+    let (id, name) = amu();
+    let companion = (
+        (id, name),
+        [9.5, 0.0, 8.5],
+        inventory_with(&[(0, stack(ITEM_STONE, 5))]),
+    );
+    let mut failing = with_mining_player(companion.clone());
+    let mut control = with_mining_player(companion);
+    failing.run_plan("阿木", id, vec![place(10, 0, 8)], 5);
+    let mut ticks = 0;
+    while failing.running(id) {
+        failing.step();
+        control.step();
+        ticks += 1;
+        assert!(ticks < 20, "the companion fails promptly");
+    }
+    for _ in 0..3 {
+        failing.step();
+        control.step();
+    }
+    assert_eq!(
+        failing.stored(id).fail_reason,
+        COMPANION_TASK_FAIL_INVENTORY_FULL
+    );
+    let (inventory, position, mining) = player_state(&failing);
+    let progress = mining.clone().expect("the player is mid-mining");
+    assert_eq!(progress.target, pos(3, 0, 5));
+    assert!(progress.elapsed > 0 && progress.elapsed < progress.required);
+    assert_eq!(failing.block(pos(3, 0, 5)), Some(STONE));
+    assert_eq!(inventory.slots[4], stack(ITEM_DIRT, 9));
+    assert_eq!(
+        (inventory, position, mining),
+        player_state(&control),
+        "the companion failure changes nothing on the player"
+    );
 }

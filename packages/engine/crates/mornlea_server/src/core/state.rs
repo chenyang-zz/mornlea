@@ -2132,10 +2132,12 @@ impl AuthorityState {
             });
         // Capacity is judged only on saturated progress on this target, by
         // the same resolver the mining provider settles with: its capacity
-        // refusal is the exact condition that keeps the block in place.
+        // refusal is the exact condition that keeps the block in place. The
+        // saturation check also keeps the resolver off every other tick; an
+        // unbreakable block resolves to a protected-block refusal, never to
+        // a capacity one.
         let capacity_exceeded = mining.is_some_and(|progress| {
             progress.target == target
-                && progress.required != 0
                 && progress.elapsed == progress.required
                 && matches!(
                     super::mutation::resolve_companion_mine(id, target, view),
