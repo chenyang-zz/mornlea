@@ -168,6 +168,24 @@ chat projector consumes IDs for wire-invalid saved command restatements and
 continues later facts. This pure task contract does not load/register actors,
 observe durable aggregate changes or compose Agent shutdown.
 
+## Shutdown family flush
+
+`core::shutdown::FLUSH_ORDER` hardcodes the save-family barrier order players,
+companions, hostiles, passives, world chunks, metadata, pinned against Go
+`host_shutdown.go:83` and `shutdown.go:152/161/169/175/179/188/193` (world
+chunks then metadata at `persistence/world.go:196/199`) by
+`core::shutdown::flush_order_tests`. The pure `family_keys` selects each
+phase's keys from the frozen pending set; the machine hands every key to
+`ActorPersistence::flush_authority` with the authority. That method's default
+forwards to the authority-free `flush` for test doubles only; the production
+`store::shutdown::SchedulerActors` overrides it and writes the family before
+returning. A failed family stops the attempt there and a retry resumes at it,
+as Go returns from the first failed `Flush`.
+`tests/persistence_failure/shutdown_family_flush.rs` drives this against a
+background `DiskStore`. `AuthorityState::drive_shutdown` still calls the
+authority-free `flush`, so a production store behind it refuses rather than
+silently skipping.
+
 ## Agent boundary
 
 Immediate Open/Close use a private checked lifecycle adapter. Recognized physical

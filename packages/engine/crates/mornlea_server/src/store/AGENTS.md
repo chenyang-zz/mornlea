@@ -15,6 +15,22 @@ budget validation but before driving any provider, and treats zero slots as
 a retain-queue answer rather than an error. Save occupancy is not load
 capacity; the scheduler only forwards the query.
 
+## Shutdown family flush ports
+
+`shutdown.rs` adapts one `AutosaveScheduler` to the two store ports the core
+shutdown machine holds at once. `SharedScheduler` keeps the scheduler in a
+single-threaded `RefCell`; `SchedulerActors` (`ActorPersistence`) and
+`SchedulerStore` (`StoreHandle`) both point to it, and each port method
+borrows it only for that one call. No `Arc`/`Mutex`; a reentrant borrow is a
+typed internal error. `SchedulerActors` overrides `flush_authority`: the
+scheduler's `flush_family` selects only the requested key through
+`AuthorityState::select_family`, dispatches only retry cohorts of the same
+flush phase (splitting a mixed cohort), and returns only after every tracked
+ticket drains and the authority reports nothing pending for that key. The
+authority-free `flush` refuses with a typed internal error instead of writing
+nothing. The store implements core ports only; core names no store type on
+this path.
+
 ## Map and ownership
 
 - `mailbox.rs` and `scheduler.rs` retain owned snapshots through queue, worker,
