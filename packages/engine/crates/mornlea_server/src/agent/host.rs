@@ -1155,6 +1155,18 @@ impl PlanHost {
             });
             return;
         }
+        // Decode-time rules against the frozen snapshot come before any
+        // current-world read, exactly as the Go bridge decodes the plan
+        // before the outcome reaches the tick.
+        if validate_against_frozen(slot, &response.plan).is_err() {
+            self.plans.remove(&companion);
+            report.rejected.push(InstallRejection {
+                companion,
+                attempt,
+                reason: InstallReject::InvalidPlan,
+            });
+            return;
+        }
         let Some(world) = world else {
             self.plans.remove(&companion);
             report.rejected.push(InstallRejection {
@@ -1287,6 +1299,56 @@ impl Default for PlanHost {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Checks every plan step against the frozen snapshot the plan was asked
+/// for, in step order: a follow target must be in the frozen online set,
+/// a mine target must read from the frozen projection and be mineable
+/// there, and the placing item of a place block must be held in the
+/// frozen inventory. These are the Go decode-time rules
+/// (`validatePlanStepsAgainstSnapshot`); a violation is an invalid plan,
+/// never a world change. The place block registry is enforced by the
+/// `PlanBlock` type itself.
+fn validate_against_frozen(slot: &PlanSlot, plan: &AgentPlan) -> Result<(), InstallReject> {
+    let frozen = &slot.frozen;
+    for step in &plan.steps {
+        match step {
+            PlanStep::GoTo { .. } => {}
+            PlanStep::Follow { player_id } => {
+                if !frozen
+                    .online_players
+                    .iter()
+                    .any(|player| player.player_id == *player_id)
+                {
+                    return Err(InstallReject::InvalidPlan);
+                }
+            }
+            PlanStep::Mine { x, y, z } => {
+                let block = terrain_lookup(
+                    frozen.terrain.origin,
+                    &frozen.terrain.ready_columns,
+                    &frozen.terrain.blocks,
+                    BlockPos::new(*x, *y, *z),
+                )
+                .ok_or(InstallReject::InvalidPlan)?;
+                if !plan_mineable(block) {
+                    return Err(InstallReject::InvalidPlan);
+                }
+            }
+            PlanStep::Place { block, .. } => {
+                let item = plan_block_item(*block);
+                if !frozen
+                    .companion
+                    .inventory
+                    .iter()
+                    .any(|held| held.item == item && held.count >= 1)
+                {
+                    return Err(InstallReject::InvalidPlan);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Revalidates every plan step against the current world.

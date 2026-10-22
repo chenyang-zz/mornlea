@@ -1405,3 +1405,141 @@ fn real_lease_host_reclaims_more_than_sixty_four_panicked_plan_cycles() {
     assert_eq!(agent.retained_requests(), 0);
     assert!(wire.closed.load(Ordering::SeqCst));
 }
+
+/// Dispatches one plan over the scripted agent with a caller-adjusted
+/// frozen snapshot, completes it with `plan`, and installs it against
+/// `world`, returning the install report.
+fn install_against(
+    adjust_frozen: impl FnOnce(&mut mornlea_server::contracts::PlanningSnapshot),
+    plan: AgentPlan,
+    world: &CurrentWorld,
+) -> mornlea_server::agent::host::InstallReport {
+    let (_, clock) = StepClock::start();
+    let mut script = ScriptAgent::new();
+    let mut snapshots = registry(&clock);
+    let mut host = PlanHost::new();
+    let mut dispatch = plan_dispatch(40, 41, 100);
+    adjust_frozen(&mut dispatch.snapshot);
+    host.dispatch_plan(&mut script, &mut snapshots, &*clock, dispatch)
+        .expect("dispatch admits");
+    let request = plan_request_at(&script, 0);
+    script.terminals.insert(
+        request.leased.base.request_id,
+        AgentPoll::Completed(echo_plan(&request, plan)),
+    );
+    assert_eq!(
+        host.drain_outcomes(&mut script, &mut snapshots, &*clock)
+            .unwrap()
+            .completed,
+        1
+    );
+    host.install(101, 9, world)
+}
+
+fn rejected_reasons(report: &mornlea_server::agent::host::InstallReport) -> Vec<InstallReject> {
+    report
+        .rejected
+        .iter()
+        .map(|rejection| rejection.reason)
+        .collect()
+}
+
+fn place_planks_plan() -> AgentPlan {
+    AgentPlan::try_new(
+        "放木板".to_owned(),
+        vec![PlanStep::Place {
+            x: 8,
+            y: 63,
+            z: -2,
+            block: mornlea_server::contracts::PlanBlock::OakPlanks,
+        }],
+    )
+    .unwrap()
+}
+
+fn empty_inventory() -> [ItemStack; 36] {
+    [ItemStack {
+        item: 0,
+        count: 0,
+        durability: 0,
+    }; 36]
+}
+
+/// Go decode-time `validatePlanStepsAgainstSnapshot` (planner.go:268-276)
+/// refuses a mine target the frozen projection cannot read or that is not
+/// mineable there; the bridge maps it to InvalidPlan
+/// (companion_agent.go:666-669, companion_manager.go:605-606).
+#[test]
+fn frozen_mine_target_not_mineable_is_invalid_plan() {
+    // Air at the target on both sides: the current world matches the
+    // frozen one, so only the frozen-side rule can classify it.
+    let frozen_air = |snapshot: &mut mornlea_server::contracts::PlanningSnapshot| {
+        let mut blocks = snapshot.terrain.blocks.clone();
+        blocks[(18 * 17 + 6) * 33 + 14] = 0;
+        snapshot.terrain = mornlea_server::contracts::SnapshotTerrain::try_new(
+            snapshot.terrain.origin,
+            snapshot.terrain.dimensions,
+            snapshot.terrain.ready_columns.clone(),
+            snapshot.terrain.heights.clone(),
+            blocks,
+        )
+        .unwrap();
+        snapshot.exposed_blocks.clear();
+    };
+    let mut world = matching_world(101);
+    world.blocks.insert(target(), 0);
+    let report = install_against(frozen_air, mine_target_plan(), &world);
+    assert_eq!(report.installed, 0);
+    assert_eq!(rejected_reasons(&report), vec![InstallReject::InvalidPlan]);
+}
+
+/// Go decode-time follow check (planner.go:264-267): a follow target
+/// missing from the frozen online set is InvalidPlan even when the player
+/// is online in the current world.
+#[test]
+fn frozen_follow_target_not_online_is_invalid_plan() {
+    let other = PlayerId::try_from_bytes(uuid(11)).unwrap();
+    let mut world = matching_world(101);
+    world.online_players.insert(other, [1.5, 65.0, 1.5]);
+    let plan = AgentPlan::try_new(
+        "跟随".to_owned(),
+        vec![PlanStep::Follow { player_id: other }],
+    )
+    .unwrap();
+    let report = install_against(|_| {}, plan, &world);
+    assert_eq!(report.installed, 0);
+    assert_eq!(rejected_reasons(&report), vec![InstallReject::InvalidPlan]);
+}
+
+/// Go decode-time place inventory check (planner.go:282-284): the frozen
+/// snapshot inventory must hold the placing item, even when the current
+/// inventory now holds it.
+#[test]
+fn frozen_place_inventory_missing_is_invalid_plan() {
+    let frozen_empty = |snapshot: &mut mornlea_server::contracts::PlanningSnapshot| {
+        snapshot.companion.inventory = empty_inventory();
+    };
+    let report = install_against(frozen_empty, place_planks_plan(), &matching_world(101));
+    assert_eq!(report.installed, 0);
+    assert!(report.envelopes.is_empty());
+    assert_eq!(rejected_reasons(&report), vec![InstallReject::InvalidPlan]);
+}
+
+/// Go install-time current-authority revalidation re-runs the place
+/// inventory check on the current snapshot (companion_manager.go:651-653
+/// via planner.go:282-284) and fails it as WorldChanged
+/// (companion_manager.go:590-592); with both inventories holding the item
+/// the plan installs.
+#[test]
+fn current_place_inventory_missing_is_world_changed() {
+    let mut world = matching_world(101);
+    world.inventory = empty_inventory();
+    let report = install_against(|_| {}, place_planks_plan(), &world);
+    assert_eq!(report.installed, 0);
+    assert!(report.envelopes.is_empty());
+    assert_eq!(rejected_reasons(&report), vec![InstallReject::WorldChanged]);
+
+    let report = install_against(|_| {}, place_planks_plan(), &matching_world(101));
+    assert_eq!(report.installed, 1, "holding on both sides installs");
+    assert!(report.rejected.is_empty());
+}
