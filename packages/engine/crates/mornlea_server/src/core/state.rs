@@ -45,7 +45,7 @@ use super::companion_chat::{
 };
 use super::companion_runner::{
     CompanionPathOutcome, CompanionPathRequest, CompanionRunnerOutput, FollowObservation,
-    RunnerEffect, RunnerTick, TaskRunner,
+    InteractionObservation, MiningObservation, RunnerEffect, RunnerTick, TaskRunner,
 };
 use super::container_store::ContainerState;
 use super::contracts::*;
@@ -1811,11 +1811,11 @@ impl AuthorityState {
 
     /// Advances every running companion task by one runner pass at a
     /// tick boundary: delivered path outcomes are applied first, then
-    /// expiry, then step movement, in the Go tick order. Movement
-    /// actions and path searches are returned as effects; the runtime
-    /// runs the searches and hands their outcomes back no earlier than
-    /// the next pass, so a search never moves a companion in the tick
-    /// that issued it. Terminal effects finish through the existing
+    /// expiry, then step movement or interaction, in the Go tick order.
+    /// Movement, mining and placement actions and path searches are
+    /// returned as effects; the runtime runs the searches and hands their
+    /// outcomes back no earlier than the next pass, so a search never
+    /// moves a companion in the tick that issued it. Terminal effects finish through the existing
     /// finish path, which clears only the current task slot.
     pub fn advance_companion_runners(
         &mut self,
@@ -1836,6 +1836,7 @@ impl AuthorityState {
             current_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
             grid: Option<mornlea_engine::native::contracts::pathfind::PathGrid>,
             stored: (usize, u64),
+            interaction: InteractionObservation,
         }
         let snapshots: Vec<RunnerSnapshot> = {
             let view = self.settled_read()?;
@@ -1943,6 +1944,18 @@ impl AuthorityState {
                         }
                     }
                 }
+                let interaction = match steps.get(step_index) {
+                    Some(step @ (PlanStep::Mine { .. } | PlanStep::Place { .. })) => {
+                        Self::interaction_observation(
+                            &view,
+                            id,
+                            actor.dimension,
+                            center_chunk,
+                            step,
+                        )
+                    }
+                    _ => InteractionObservation::default(),
+                };
                 let grid = if needs_grid {
                     super::companion_runner::build_path_grid(
                         &view,
@@ -1961,6 +1974,7 @@ impl AuthorityState {
                     current_revisions,
                     grid,
                     stored,
+                    interaction,
                 });
             }
             snapshots
@@ -2008,6 +2022,7 @@ impl AuthorityState {
                         position: snapshot.position,
                         follow: snapshot.follow,
                         current_revisions: snapshot.current_revisions,
+                        interaction: snapshot.interaction,
                     },
                 );
             for effect in effects {
@@ -2026,7 +2041,9 @@ impl AuthorityState {
                             }
                         }
                     },
-                    RunnerEffect::Move(action) => output.actions.push((id, action)),
+                    RunnerEffect::Move(action) | RunnerEffect::Interact(action) => {
+                        output.actions.push((id, action));
+                    }
                     RunnerEffect::StepProgress { step_index } => {
                         if let Some(runtime) =
                             self.residents.runtimes.get_mut(&ActorKey::Companion(id))
@@ -2059,11 +2076,99 @@ impl AuthorityState {
         Ok(output)
     }
 
+    /// Settled observations for a companion's current mine or place step.
+    ///
+    /// Every read is bounded: the approach goal inspects at most 36 cells
+    /// of the companion's 3x3 chunk window, and the remaining fields read
+    /// the target cell, the mining progress and the inventory once. Cells
+    /// above or below the world read as air, as the Go chunk view does;
+    /// cells in a chunk outside the window or not Ready are unreadable.
+    fn interaction_observation(
+        view: &AuthorityReadView<'_>,
+        id: CompanionId,
+        dimension: Dimension,
+        center_chunk: mornlea_domain::ChunkPos,
+        step: &PlanStep,
+    ) -> InteractionObservation {
+        let (target, place_block) = match *step {
+            PlanStep::Mine { x, y, z } => (BlockPos::new(x, y, z), None),
+            PlanStep::Place { x, y, z, block } => (
+                BlockPos::new(x, y, z),
+                Some(super::companion_runner::plan_block_id(block)),
+            ),
+            PlanStep::GoTo { .. } | PlanStep::Follow { .. } => {
+                return InteractionObservation::default();
+            }
+        };
+        let key = ActorKey::Companion(id);
+        let window_block = |cell: BlockPos| -> Option<u16> {
+            if !(-64..320).contains(&cell.y()) {
+                return Some(0);
+            }
+            let chunk =
+                mornlea_domain::ChunkPos::new(cell.x().div_euclid(16), cell.z().div_euclid(16));
+            if (chunk.x() - center_chunk.x()).abs() > 1 || (chunk.z() - center_chunk.z()).abs() > 1
+            {
+                return None;
+            }
+            view.ready_chunk_revision(ChunkKey {
+                dimension,
+                pos: chunk,
+            })?;
+            view.observation(dimension, cell)
+                .map(|observed| observed.block)
+        };
+        let approach_goal = super::companion_runner::interaction_goal(target, window_block);
+        let target_block = view
+            .observation(dimension, target)
+            .map(|observed| observed.block);
+        let mining = view
+            .mining(key)
+            .filter(|progress| progress.dimension == dimension)
+            .map(|progress| MiningObservation {
+                target: progress.target,
+                elapsed: progress.elapsed,
+                required: progress.required,
+            });
+        // Capacity is judged only on saturated progress on this target, by
+        // the same resolver the mining provider settles with: its capacity
+        // refusal is the exact condition that keeps the block in place. The
+        // saturation check also keeps the resolver off every other tick; an
+        // unbreakable block resolves to a protected-block refusal, never to
+        // a capacity one.
+        let capacity_exceeded = mining.is_some_and(|progress| {
+            progress.target == target
+                && progress.elapsed == progress.required
+                && matches!(
+                    super::mutation::resolve_companion_mine(id, target, view),
+                    Err(RuleReject::Wire(RejectReason::HotbarFull))
+                )
+        });
+        let holds_item = place_block
+            .and_then(super::mutation::block_drop)
+            .zip(view.inventory(key))
+            .is_some_and(|(item, inventory)| {
+                inventory
+                    .slots
+                    .iter()
+                    .any(|slot| slot.item == item && slot.count > 0)
+            });
+        let tunables = view.environment().map(|environment| environment.tunables);
+        InteractionObservation {
+            approach_goal,
+            target_block,
+            mining,
+            capacity_exceeded,
+            holds_item,
+            eye_height: tunables.map_or(0.0, |tunables| tunables.eye_height()),
+            reach: tunables.map_or(0.0, |tunables| tunables.interaction_reach()),
+        }
+    }
+
     /// Converts a stored running task's steps back to checked plan
     /// steps for the runner, in their original order and positions, so
     /// the stored step index keeps naming the same step for any step
-    /// mix. Mine and place steps are restored faithfully even though
-    /// their executor is separate work; unknown kinds are skipped
+    /// mix, mine and place steps included; unknown kinds are skipped
     /// rather than invented.
     fn stored_plan_steps(task: &StoredCompanionTask) -> Vec<PlanStep> {
         task.plan_steps
@@ -2270,7 +2375,7 @@ impl AuthorityState {
                     x: *x,
                     y: *y,
                     z: *z,
-                    block: Self::chat_plan_block_id(*block),
+                    block: super::companion_runner::plan_block_id(*block),
                     player_id: StoredPlayerId::from_bytes([0; 16]),
                 },
                 PlanStep::Follow { player_id } => StoredPlanStep {
@@ -2291,38 +2396,6 @@ impl AuthorityState {
             start_tick,
             deadline_ticks,
             fail_reason: 0,
-        }
-    }
-
-    /// Place-block table shared with the agent host mapping.
-    ///
-    /// Values are the frozen core block ids in declaration order, copied
-    /// read-only from the agent host's plan mapping.
-    fn chat_plan_block_id(block: PlanBlock) -> u16 {
-        match block {
-            PlanBlock::Brick => 21,
-            PlanBlock::Chest => 11,
-            PlanBlock::Clay => 24,
-            PlanBlock::Cobblestone => 13,
-            PlanBlock::Dirt => 3,
-            PlanBlock::Furnace => 9,
-            PlanBlock::Glass => 20,
-            PlanBlock::Grass => 4,
-            PlanBlock::Gravel => 16,
-            PlanBlock::IronBlock => 10,
-            PlanBlock::Leaves => 19,
-            PlanBlock::LightBlock => 12,
-            PlanBlock::MossyCobblestone => 26,
-            PlanBlock::OakLog => 17,
-            PlanBlock::OakPlanks => 18,
-            PlanBlock::RoofTile => 23,
-            PlanBlock::Sand => 15,
-            PlanBlock::SmoothStone => 14,
-            PlanBlock::SnowBlock => 25,
-            PlanBlock::Stone => 2,
-            PlanBlock::StoneBrick => 6,
-            PlanBlock::WhiteWool => 22,
-            PlanBlock::Workbench => 45,
         }
     }
 
@@ -19965,8 +20038,8 @@ mod companion_chat_boundary_tests {
         );
     }
 
-    /// A restored mine-only task has no executor in this slice, but its
-    /// deadline still expires it exactly at the deadline tick.
+    /// A restored mine-only task still expires exactly at the deadline
+    /// tick, before its approach starts.
     #[test]
     fn restored_mine_only_task_still_times_out() {
         let mut a = fresh();
@@ -20081,6 +20154,7 @@ mod companion_chat_boundary_tests {
                     position: [30.5, 65.0, 8.5],
                 },
                 current_revisions: Vec::new(),
+                interaction: super::super::companion_runner::InteractionObservation::default(),
             },
         );
         assert_eq!(effects.len(), 1);
@@ -25971,3 +26045,7 @@ mod command_requeue_tests {
         assert_eq!(state.queued_command_len(), 5, "nothing accepted is dropped");
     }
 }
+
+#[cfg(test)]
+#[path = "state_companion_interaction_tests.rs"]
+mod companion_interaction_tests;
