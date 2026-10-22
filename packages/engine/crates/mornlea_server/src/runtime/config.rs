@@ -1347,12 +1347,15 @@ mod tests {
         ));
     }
 
-    /// Fluid budgets stay raw numbers here; the fluid host owns `TickBudget`.
+    /// Fluid budgets stay raw numbers here; the fluid host owns constructing
+    /// `TickBudget`. The tick assembly only carries the budget it is handed.
     #[test]
     fn runtime_never_constructs_tick_budget() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
         // Split so this test's own source does not match.
-        let needle = ["Tick", "Budget"].concat();
+        // The fields are private, so every construction goes through an
+        // associated constructor.
+        let needle = ["Tick", "Budget", "::"].concat();
         for entry in walkdir(&root) {
             let text = fs::read_to_string(&entry).unwrap();
             let code: String = text

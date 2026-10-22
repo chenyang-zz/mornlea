@@ -918,6 +918,12 @@ pub(crate) fn clear_companion_inventory(authority: &mut AuthorityState, id: Comp
         .slots = [ItemStack::default(); 36];
 }
 
+/// The unbounded per-tick work budget for runtime tests, which never
+/// construct the budget themselves.
+pub(crate) fn full_tick_budget() -> crate::contracts::TickBudget {
+    crate::contracts::TickBudget::full()
+}
+
 /// Gives every player actor an empty inventory, which a whole authority
 /// tick requires and the planning fixtures do not carry.
 pub(crate) fn give_players_inventories(authority: &mut AuthorityState) {

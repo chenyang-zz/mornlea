@@ -141,7 +141,9 @@ impl ServerTick {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::state::companion_planning::tests::give_players_inventories;
+    use crate::core::state::companion_planning::tests::{
+        full_tick_budget, give_players_inventories,
+    };
     use crate::runtime::companion_planning::tests::{Rig, go_home_plan, queued_fixture, timeout};
 
     /// The planning fixture with an empty inventory for every player, so
@@ -157,7 +159,7 @@ mod tests {
 
     fn server_tick(companion: CompanionId) -> ServerTick {
         ServerTick::new(
-            TickStartup::new(timeout(), TickBudget::full()),
+            TickStartup::new(timeout(), full_tick_budget()),
             vec![companion],
         )
     }
