@@ -601,6 +601,25 @@ impl AcquisitionState {
             },
         ))
     }
+    /// The save target of one eligible chunk, independently of the eligible
+    /// order `next_save` follows; `None` when that chunk has nothing to save.
+    pub(crate) fn save_target(&self, key: ChunkKey) -> Option<(usize, SaveUrgency)> {
+        let ready = if self.eligible.contains(&(false, key)) {
+            false
+        } else if self.eligible.contains(&(true, key)) {
+            true
+        } else {
+            return None;
+        };
+        Some((
+            self.records.get(&key)?.estimate?,
+            if ready {
+                SaveUrgency::Autosave
+            } else {
+                SaveUrgency::Unload
+            },
+        ))
+    }
     pub(crate) fn selected(&mut self, snapshot: OwnedSnapshot) -> Result<(), ServerError> {
         capacity(Resource::SaveChunks, self.flights.len() + 1, MAX_ATTEMPTS)?;
         let SaveKey::Chunk(key) = snapshot.key else {

@@ -74,6 +74,8 @@ pub(crate) mod companion_planning;
 mod mob_persistence;
 #[path = "state_player_persistence.rs"]
 mod player_persistence;
+#[path = "state_shutdown_flush.rs"]
+mod shutdown_flush;
 #[path = "state_source_snapshot.rs"]
 mod source_snapshot;
 #[path = "state_source_tick.rs"]
@@ -3349,27 +3351,9 @@ impl AuthorityState {
     }
 
     pub fn freeze(&mut self) -> FrozenAuthority {
-        let mut save_keys = if self.acquisition.enabled() {
-            self.acquisition.save_keys()
-        } else {
-            Vec::new()
-        };
-        // Closing preserves ledger selection until the final flush consumes it.
-        if let Some(ledger) = &self.actor_saves {
-            for key in ledger.save_keys() {
-                if !save_keys.contains(&key) {
-                    save_keys.push(key);
-                }
-            }
-        }
-        for snapshot in self.dirty.iter().chain(self.in_flight.iter()) {
-            if !save_keys.contains(&snapshot.key) {
-                save_keys.push(snapshot.key.clone());
-            }
-        }
         FrozenAuthority {
             final_tick: self.shutdown.final_tick.unwrap_or(self.next_tick),
-            save_keys,
+            save_keys: self.pending_save_keys(),
         }
     }
 

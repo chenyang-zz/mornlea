@@ -141,14 +141,13 @@ fn run_phase(
         ShutdownPhase::FinalizeMemory => {
             finalize_memory(state, ports.memory, ports.clock, deadline, report)
         }
-        ShutdownPhase::FlushPlayers => flush_lane(state, ports, deadline, report, Lane::Players),
-        ShutdownPhase::FlushCompanions => {
-            flush_family(ports, SaveKey::Companions, deadline, report)
+        ShutdownPhase::FlushPlayers | ShutdownPhase::FlushWorld => {
+            flush_lane(state, ports, phase, deadline, report)
         }
-        ShutdownPhase::FlushHostiles => flush_family(ports, SaveKey::Hostiles, deadline, report),
-        ShutdownPhase::FlushPassives => flush_family(ports, SaveKey::Passives, deadline, report),
-        ShutdownPhase::FlushWorld => flush_lane(state, ports, deadline, report, Lane::World),
-        ShutdownPhase::FlushMetadata => flush_family(ports, SaveKey::Metadata, deadline, report),
+        ShutdownPhase::FlushCompanions
+        | ShutdownPhase::FlushHostiles
+        | ShutdownPhase::FlushPassives
+        | ShutdownPhase::FlushMetadata => flush_family(state, ports, phase, deadline, report),
         ShutdownPhase::StoreSync => {
             ports.store.sync(deadline)?;
             // A successful sync is the durability barrier for every flushed
@@ -228,10 +227,54 @@ pub(crate) fn finalize_memory(
     }
 }
 
-/// The per-key flush lanes of the frozen authority.
-enum Lane {
-    Players,
-    World,
+/// The six save families in the fixed order the shutdown flush visits
+/// them, mirroring Go: players (`host_shutdown.go:83`) before the server
+/// shutdown, then companions, hostiles and passives (`shutdown.go:152`,
+/// `:161`, `:169`), world chunks and metadata (`shutdown.go:175`, which is
+/// `persistence/world.go:196` then `:199`). Each family is a barrier: the
+/// next one starts only after the store reports the previous one durable,
+/// and a failed family stops the attempt at that family.
+pub const FLUSH_ORDER: [ShutdownPhase; 6] = [
+    ShutdownPhase::FlushPlayers,
+    ShutdownPhase::FlushCompanions,
+    ShutdownPhase::FlushHostiles,
+    ShutdownPhase::FlushPassives,
+    ShutdownPhase::FlushWorld,
+    ShutdownPhase::FlushMetadata,
+];
+
+/// Selects the save keys one flush phase hands to the store, in order.
+///
+/// Pure over the frozen pending key set. The players and world lanes take
+/// only their own pending keys in the frozen order; the aggregate families
+/// and metadata are visited exactly once whether or not they are pending,
+/// like the unconditional Go `Flush` calls. Any other phase selects nothing.
+pub fn family_keys(phase: ShutdownPhase, pending: &[SaveKey]) -> Vec<SaveKey> {
+    match phase {
+        ShutdownPhase::FlushPlayers | ShutdownPhase::FlushWorld => pending
+            .iter()
+            .filter(|key| flush_phase(key) == phase)
+            .cloned()
+            .collect(),
+        ShutdownPhase::FlushCompanions => vec![SaveKey::Companions],
+        ShutdownPhase::FlushHostiles => vec![SaveKey::Hostiles],
+        ShutdownPhase::FlushPassives => vec![SaveKey::Passives],
+        ShutdownPhase::FlushMetadata => vec![SaveKey::Metadata],
+        _ => Vec::new(),
+    }
+}
+
+/// The flush phase that owns one save key. Pure; a store uses it to keep
+/// every write it issues during a phase inside that phase's family.
+pub fn flush_phase(key: &SaveKey) -> ShutdownPhase {
+    match key {
+        SaveKey::Player(_) => ShutdownPhase::FlushPlayers,
+        SaveKey::Companions => ShutdownPhase::FlushCompanions,
+        SaveKey::Hostiles => ShutdownPhase::FlushHostiles,
+        SaveKey::Passives => ShutdownPhase::FlushPassives,
+        SaveKey::Chunk(_) => ShutdownPhase::FlushWorld,
+        SaveKey::Metadata => ShutdownPhase::FlushMetadata,
+    }
 }
 
 /// Flushes one lane's frozen save keys.
@@ -242,22 +285,13 @@ enum Lane {
 fn flush_lane(
     state: &mut AuthorityState,
     ports: &mut ShutdownPorts<'_>,
+    phase: ShutdownPhase,
     deadline: Deadline,
     report: &mut ShutdownReport,
-    lane: Lane,
 ) -> Result<(), ServerError> {
     let frozen = state.freeze();
-    let keys = frozen
-        .save_keys
-        .iter()
-        .filter(|key| match lane {
-            Lane::Players => matches!(key, SaveKey::Player(_)),
-            Lane::World => matches!(key, SaveKey::Chunk(_)),
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in keys {
-        let flushed = ports.actors.flush(key, deadline)?;
+    for key in family_keys(phase, &frozen.save_keys) {
+        let flushed = ports.actors.flush_authority(state, key, deadline)?;
         report.durable = report.durable.saturating_add(flushed.durable);
     }
     Ok(())
@@ -269,15 +303,18 @@ fn flush_lane(
 /// failure report preserves verbatim, so an interrupted flush leaves the
 /// retained report naming the work that has not completed.
 fn flush_family(
+    state: &mut AuthorityState,
     ports: &mut ShutdownPorts<'_>,
-    family: SaveKey,
+    phase: ShutdownPhase,
     deadline: Deadline,
     report: &mut ShutdownReport,
 ) -> Result<(), ServerError> {
-    let flushed = ports.actors.flush(family, deadline)?;
-    report.durable = report.durable.saturating_add(flushed.durable);
-    report.failed = report.failed.saturating_add(flushed.failed);
-    report.outstanding = flushed.outstanding;
+    for family in family_keys(phase, &[]) {
+        let flushed = ports.actors.flush_authority(state, family, deadline)?;
+        report.durable = report.durable.saturating_add(flushed.durable);
+        report.failed = report.failed.saturating_add(flushed.failed);
+        report.outstanding = flushed.outstanding;
+    }
     Ok(())
 }
 
@@ -313,4 +350,190 @@ pub(crate) fn is_transient(error: &ServerError) -> bool {
             | ServerError::Disconnected
             | ServerError::Agent { .. }
     )
+}
+
+#[cfg(test)]
+mod flush_order_tests {
+    use super::{FLUSH_ORDER, family_keys, flush_phase};
+    use crate::core::contracts::{ChunkKey, SaveKey, ShutdownPhase};
+    use mornlea_domain::{ChunkPos, Dimension, PlayerId};
+
+    /// Reads one Go production source relative to the repository root.
+    fn go_source(relative: &str) -> String {
+        let path = format!("{}/../../../{relative}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    }
+
+    /// One-based line of the only occurrence of `needle` in `source`.
+    fn line_of(source: &str, needle: &str) -> usize {
+        let lines: Vec<usize> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(needle))
+            .map(|(index, _)| index + 1)
+            .collect();
+        assert_eq!(lines.len(), 1, "{needle:?} must appear exactly once");
+        lines[0]
+    }
+
+    fn position(phase: ShutdownPhase) -> usize {
+        ShutdownPhase::successors()
+            .iter()
+            .position(|candidate| *candidate == phase)
+            .unwrap()
+    }
+
+    #[test]
+    fn flush_order_is_the_fixed_family_subsequence() {
+        let flushes: Vec<ShutdownPhase> = ShutdownPhase::successors()
+            .iter()
+            .copied()
+            .filter(|phase| FLUSH_ORDER.contains(phase))
+            .collect();
+        assert_eq!(
+            FLUSH_ORDER,
+            [
+                ShutdownPhase::FlushPlayers,
+                ShutdownPhase::FlushCompanions,
+                ShutdownPhase::FlushHostiles,
+                ShutdownPhase::FlushPassives,
+                ShutdownPhase::FlushWorld,
+                ShutdownPhase::FlushMetadata,
+            ]
+        );
+        assert_eq!(flushes, FLUSH_ORDER);
+        // The flush families sit contiguously between memory finalization
+        // and the store sync, so no other boundary runs between two of them.
+        let first = position(ShutdownPhase::FlushPlayers);
+        for (offset, phase) in FLUSH_ORDER.iter().enumerate() {
+            assert_eq!(position(*phase), first + offset);
+        }
+        assert_eq!(position(ShutdownPhase::FinalizeMemory) + 1, first);
+        assert_eq!(
+            position(ShutdownPhase::StoreSync),
+            first + FLUSH_ORDER.len()
+        );
+    }
+
+    #[test]
+    fn flush_order_matches_go_shutdown_source() {
+        // Go host shutdown flushes players, then runs the server shutdown,
+        // whose barriers run companions, hostiles, passives, world (chunks
+        // then metadata), store sync, the companion runtime close hook, and
+        // the store close, each returning before the next starts.
+        let host = go_source("server/server/host_shutdown.go");
+        let server = go_source("server/server/shutdown.go");
+        let world = go_source("server/server/persistence/world.go");
+        assert_eq!(line_of(&host, "h.players.Flush(ctx)"), 83);
+        assert_eq!(line_of(&host, "worldErr := h.world.Shutdown(ctx)"), 93);
+        let pinned = [
+            (
+                ShutdownPhase::FlushCompanions,
+                "server.companions.Flush(ctx)",
+                152,
+            ),
+            (
+                ShutdownPhase::FlushHostiles,
+                "server.hostiles.Flush(ctx)",
+                161,
+            ),
+            (
+                ShutdownPhase::FlushPassives,
+                "server.passives.Flush(ctx)",
+                169,
+            ),
+            (ShutdownPhase::FlushWorld, "server.world.Flush(ctx)", 175),
+            (ShutdownPhase::StoreSync, "server.store.Sync(ctx)", 179),
+            (
+                ShutdownPhase::ReleaseAgent,
+                "server.beforeStoreClose(ctx)",
+                188,
+            ),
+            (ShutdownPhase::StoreClose, "server.store.Close()", 193),
+        ];
+        let mut previous_line = 0;
+        let mut previous_phase = position(ShutdownPhase::FlushPlayers);
+        for (phase, needle, line) in pinned {
+            assert_eq!(line_of(&server, needle), line, "{needle}");
+            assert!(line > previous_line, "Go order at {needle}");
+            assert!(position(phase) > previous_phase, "Rust order at {phase:?}");
+            previous_line = line;
+            previous_phase = position(phase);
+        }
+        // Inside the Go world barrier chunks precede metadata.
+        let chunks = line_of(&world, "world.flushFrozen(ctx)");
+        let metadata = line_of(&world, "return world.flushMetadata(ctx)");
+        assert_eq!((chunks, metadata), (196, 199));
+        assert!(position(ShutdownPhase::FlushWorld) < position(ShutdownPhase::FlushMetadata));
+        assert!(position(ShutdownPhase::FlushMetadata) < position(ShutdownPhase::StoreSync));
+    }
+
+    fn player(tag: u8) -> SaveKey {
+        let mut bytes = [0u8; 16];
+        bytes[0] = tag;
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        SaveKey::Player(PlayerId::try_from_bytes(bytes).unwrap())
+    }
+
+    fn chunk(x: i32) -> SaveKey {
+        SaveKey::Chunk(ChunkKey {
+            dimension: Dimension::OVERWORLD,
+            pos: ChunkPos::new(x, 0),
+        })
+    }
+
+    #[test]
+    fn family_keys_selects_each_family_only() {
+        let pending = vec![
+            chunk(2),
+            player(1),
+            SaveKey::Hostiles,
+            chunk(1),
+            player(2),
+            SaveKey::Companions,
+        ];
+        let before = pending.clone();
+        assert_eq!(
+            family_keys(ShutdownPhase::FlushPlayers, &pending),
+            vec![player(1), player(2)]
+        );
+        assert_eq!(
+            family_keys(ShutdownPhase::FlushWorld, &pending),
+            vec![chunk(2), chunk(1)]
+        );
+        // Aggregate families and metadata are visited once whether or not
+        // they are pending, like the unconditional Go Flush calls.
+        for (phase, key) in [
+            (ShutdownPhase::FlushCompanions, SaveKey::Companions),
+            (ShutdownPhase::FlushHostiles, SaveKey::Hostiles),
+            (ShutdownPhase::FlushPassives, SaveKey::Passives),
+            (ShutdownPhase::FlushMetadata, SaveKey::Metadata),
+        ] {
+            assert_eq!(family_keys(phase, &pending), vec![key.clone()]);
+            assert_eq!(family_keys(phase, &[]), vec![key]);
+        }
+        for phase in ShutdownPhase::successors() {
+            if !FLUSH_ORDER.contains(phase) {
+                assert!(family_keys(*phase, &pending).is_empty(), "{phase:?}");
+            }
+        }
+        for key in &pending {
+            assert!(family_keys(flush_phase(key), &pending).contains(key));
+        }
+        assert_eq!(
+            flush_phase(&SaveKey::Metadata),
+            ShutdownPhase::FlushMetadata
+        );
+        assert_eq!(
+            flush_phase(&SaveKey::Passives),
+            ShutdownPhase::FlushPassives
+        );
+        // Pure: the same input gives the same answer and is left untouched.
+        assert_eq!(
+            family_keys(ShutdownPhase::FlushWorld, &pending),
+            family_keys(ShutdownPhase::FlushWorld, &pending)
+        );
+        assert_eq!(pending, before);
+    }
 }
