@@ -1769,9 +1769,10 @@ impl AuthorityState {
     /// Test fixture seam only: it installs no task runner and stamps no
     /// deadline, so a task installed here never moves or expires. Production
     /// installs go through [`Self::install_companion_chat_plan_with_timeout`]
-    /// with the startup-frozen timeout; integration fixtures that never drive
-    /// the runner are the only other callers, which is why this stays public.
-    #[doc(hidden)]
+    /// with the startup-frozen timeout. It compiles only for this crate's
+    /// unit tests and for integration tests through the `test-support`
+    /// feature, never into a production build.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn install_companion_chat_plan(
         &mut self,
         id: CompanionId,

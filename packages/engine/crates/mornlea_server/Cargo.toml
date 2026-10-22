@@ -16,7 +16,13 @@ mornlea_storage = { path = "../mornlea_storage" }
 serde = "=1.0.229"
 serde_json = "=1.0.151"
 
+[features]
+# Exposes test-only fixture seams to this crate's integration tests.
+test-support = []
+
 [dev-dependencies]
+# Integration tests build against this crate with the test seams enabled.
+mornlea_server = { path = ".", features = ["test-support"] }
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
