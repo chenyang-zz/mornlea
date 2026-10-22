@@ -26,6 +26,7 @@ pub mod login_seed;
 pub mod mailbox;
 pub mod mutation;
 pub mod pending_restore;
+pub mod plan_validation;
 mod player_publication;
 pub mod publication;
 pub(crate) mod publication_project;

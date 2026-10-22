@@ -175,7 +175,7 @@ fn survival() -> SurvivalState {
     .unwrap()
 }
 
-fn motion(position: [f32; 3]) -> MotionState {
+pub(crate) fn motion(position: [f32; 3]) -> MotionState {
     MotionState::new(MotionStateParts {
         position: FiniteVec3::try_new(position).unwrap(),
         velocity: FiniteVec3::try_new([0.0; 3]).unwrap(),
@@ -555,7 +555,10 @@ fn current_world_matches_go_fixtures() {
     }
 }
 
-fn companion_actor(authority: &mut AuthorityState, companion: CompanionId) -> &mut ActorRecord {
+pub(crate) fn companion_actor(
+    authority: &mut AuthorityState,
+    companion: CompanionId,
+) -> &mut ActorRecord {
     authority
         .residents
         .actors
@@ -751,4 +754,166 @@ fn current_world_closed_or_failed_authority_is_outer_error_unchanged() {
         !matches!(result, Ok(Err(_))),
         "closed authority must not be classified as a world change"
     );
+}
+
+/// A companion runtime record with an empty stored task, as the install
+/// seam requires of a live companion.
+pub(crate) fn companion_runtime_record(id: CompanionId) -> ActorRuntime {
+    ActorRuntime {
+        key: ActorKey::Companion(id),
+        controls: None,
+        has_view: false,
+        reset: false,
+        attack_cooldown: 0,
+        hurt_cooldown: 0,
+        burn_cooldown: 0,
+        oxygen: 300,
+        peak_y: 0.0,
+        exhaustion_milli: 0,
+        saturation_milli: 0,
+        since_damage_ticks: 0,
+        drown_ticks: 0,
+        starvation_ticks: 0,
+        eating: None,
+        bow: None,
+        path: None,
+        aux: ActorAux::Companion {
+            generation: 0,
+            attempt: 1,
+            task: StoredCompanionTask::default(),
+            mining_target: None,
+        },
+    }
+}
+
+/// A planning fixture whose companion also carries a runtime record, so
+/// the checked install seam can land a validated plan on it.
+pub(crate) fn planning_fixture_with_runtime(text: &str) -> PlanningFixture {
+    let mut fixture = planning_fixture(text);
+    let id = fixture.companion;
+    let mut runtime = companion_runtime_record(id);
+    runtime.peak_y = companion_actor(&mut fixture.authority, id)
+        .motion
+        .position()
+        .get()[1];
+    fixture
+        .authority
+        .residents
+        .runtimes
+        .insert(ActorKey::Companion(id), runtime);
+    fixture
+}
+
+/// The stored task a companion runtime currently records.
+pub(crate) fn stored_task(
+    authority: &AuthorityState,
+    id: CompanionId,
+) -> mornlea_storage::StoredCompanionTask {
+    match &authority
+        .residents
+        .runtimes
+        .get(&ActorKey::Companion(id))
+        .expect("companion runtime")
+        .aux
+    {
+        ActorAux::Companion { task, .. } => task.clone(),
+        _ => panic!("companion runtime aux"),
+    }
+}
+
+/// Admits one more command for a configured companion and promotes the
+/// queue head, mirroring the fixture's initial admission.
+pub(crate) fn admit_command(
+    authority: &mut AuthorityState,
+    id: CompanionId,
+    command: &str,
+    issuer: CompanionChatIssuer,
+) {
+    authority
+        .companion_chat
+        .try_admit(
+            id,
+            CommandText::try_from_canonical(command.to_owned()).unwrap(),
+            issuer,
+            0,
+        )
+        .unwrap();
+    authority.companion_chat.promote_heads().unwrap();
+}
+
+/// Adds a second configured companion sharing the fixture companion's
+/// position, with its own runtime, inventory, and queued command.
+pub(crate) fn add_companion(
+    fixture: &mut PlanningFixture,
+    id: CompanionId,
+    name: &str,
+    command: &str,
+) {
+    let first = fixture.companion;
+    let mut actor = companion_actor(&mut fixture.authority, first).clone();
+    actor.key = ActorKey::Companion(id);
+    if let ActorBody::Companion(body) = &mut actor.body {
+        body.id = StoredPlayerId::from_bytes(id.bytes());
+    }
+    fixture.authority.residents.actors.push(actor);
+    fixture
+        .authority
+        .residents
+        .inventories
+        .insert(ActorKey::Companion(id), InventoryRecord::empty());
+    fixture
+        .authority
+        .residents
+        .runtimes
+        .insert(ActorKey::Companion(id), companion_runtime_record(id));
+    let issuer = fixture
+        .authority
+        .companion_chat_queue(first)
+        .unwrap()
+        .current
+        .unwrap()
+        .issuer
+        .clone();
+    fixture
+        .authority
+        .companion_chat
+        .apply_configuration(&[
+            (
+                first,
+                CompanionName::try_from_canonical("Nova".into()).unwrap(),
+            ),
+            (id, CompanionName::try_from_canonical(name.into()).unwrap()),
+        ])
+        .unwrap();
+    admit_command(&mut fixture.authority, id, command, issuer);
+}
+
+/// Moves one online player's actor five cells along x, so a frozen
+/// follow target no longer matches the current world.
+pub(crate) fn drift_online_player(authority: &mut AuthorityState, player_id: PlayerId) {
+    let actor = authority
+        .residents
+        .actors
+        .iter_mut()
+        .find(|actor| match actor.key {
+            ActorKey::Player(session) => authority
+                .sessions
+                .get(&session)
+                .is_some_and(|record| record.player_id == player_id),
+            _ => false,
+        })
+        .expect("online player actor");
+    let mut position = actor.motion.position().get();
+    position[0] += 5.0;
+    actor.motion = motion(position);
+}
+
+/// Empties one companion's inventory, as if every held item left it.
+pub(crate) fn clear_companion_inventory(authority: &mut AuthorityState, id: CompanionId) {
+    authority
+        .residents
+        .inventories
+        .get_mut(&ActorKey::Companion(id))
+        .expect("companion inventory")
+        .slots = [ItemStack::default(); 36];
 }
