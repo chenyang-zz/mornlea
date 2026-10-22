@@ -1234,6 +1234,55 @@ mod tests {
     }
 
     #[test]
+    fn plan_loop_frozen_mine_not_mineable_fails_invalid_plan() {
+        // Go decode-time check (planner.go:268-276) against the frozen
+        // snapshot is InvalidPlan (companion_agent.go:666-669 ->
+        // companion_manager.go:605-606); the stored reason is visible.
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new();
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        let request = rig.agent.plan_requests()[0].clone();
+        // Air above the standing cell: readable in the frozen projection
+        // but never mineable; the current world is unchanged.
+        let plan = crate::contracts::AgentPlan::try_new(
+            "mine".to_owned(),
+            vec![PlanStep::Mine {
+                x: -1,
+                y: 316,
+                z: -16,
+            }],
+        )
+        .unwrap();
+        rig.agent.complete(&request, plan);
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+            7,
+        )
+        .unwrap();
+        assert_eq!(report.failed, vec![(id, TaskFailure::InvalidPlan)]);
+        let stored = stored_task(&fixture.authority, id);
+        assert_eq!(stored.state, mornlea_storage::COMPANION_TASK_FAILED);
+        assert_eq!(
+            stored.fail_reason,
+            mornlea_storage::COMPANION_TASK_FAIL_INVALID_PLAN
+        );
+    }
+
+    #[test]
     fn plan_loop_current_place_inventory_fails_world_changed() {
         // Go install-time revalidation against the current snapshot
         // (companion_manager.go:651-653) fails as WorldChanged (:586-588).
