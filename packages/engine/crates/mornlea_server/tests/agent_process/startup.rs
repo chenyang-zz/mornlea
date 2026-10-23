@@ -140,7 +140,9 @@ fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
         let clock = SystemClock;
         let agent = runtime.agent_mut();
         if let Some(lease) = agent.freeze(&clock) {
-            agent.release(&lease, deadline).expect("agent lease release");
+            agent
+                .release(&lease, deadline)
+                .expect("agent lease release");
         }
         AgentHandle::close(agent, deadline).expect("agent lease close");
         McpLifecycle::close(agent, deadline).expect("mcp close");
