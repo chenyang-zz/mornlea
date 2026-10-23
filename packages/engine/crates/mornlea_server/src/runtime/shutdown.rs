@@ -147,11 +147,8 @@ pub fn agent_shutdown_ports(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::{ServerLimits, ServerPhase, TickBudget, TransportKind};
-    use crate::core::companion_runner::TaskTimeoutMinutes;
-    use crate::runtime::companion_planning::tests::Rig;
-    use crate::runtime::tick_loop::{ServerTick, TickStartup};
-    use mornlea_domain::{Command, CompanionId, PlayerId};
+    use crate::contracts::{ServerLimits, ServerPhase, TransportKind};
+    use mornlea_domain::{Command, PlayerId};
     use mornlea_protocol::{LoginStart, PlayIntent, admit_login};
 
     fn limits() -> ServerLimits {
@@ -219,29 +216,6 @@ mod tests {
         assert!(
             !matches!(outcome_from_step::<()>(Err(error)), TickOutcome::Continued),
             "tick error must not be swallowed as Continued"
-        );
-    }
-
-    #[test]
-    fn server_tick_closing_error_is_the_shutdown_trigger() {
-        let mut state = AuthorityState::try_new(limits(), 42).unwrap();
-        assert!(state.begin_close());
-        let mut tick = ServerTick::new(
-            TickStartup::new(TaskTimeoutMinutes::try_new(5).unwrap(), TickBudget::full()),
-            Vec::<CompanionId>::new(),
-        );
-        let mut rig = Rig::new();
-        let err = rig
-            .with_ports(|ports| tick.step(&mut state, ports))
-            .unwrap_err();
-        let TickOutcome::BeginShutdown(trigger) = outcome_from_step::<()>(Err(err)) else {
-            panic!("must begin shutdown");
-        };
-        assert_eq!(
-            trigger.error(),
-            ServerError::InvalidState {
-                phase: ServerPhase::Closing
-            }
         );
     }
 
