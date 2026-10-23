@@ -41,7 +41,6 @@ use crate::runtime::tick_loop::{ServerTick, TickStartup};
 use crate::runtime::RuntimeConfig;
 use crate::state::AuthorityState;
 use crate::store::disk::{DiskOptions, DiskStore};
-use crate::store::lease::WorldLease;
 use crate::store::mailbox::StoreMailbox;
 use crate::store::scheduler::{AutosaveScheduler, SchedulerConfig};
 use crate::store::shutdown::SharedScheduler;
@@ -163,11 +162,7 @@ fn store_limits() -> Result<StoreLimits, ServeError> {
 /// `max_ticks` or `stop` is set. Returns the number of ticks executed.
 pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeError> {
     let _ = std::fs::create_dir_all(&options.world);
-    let _lease = if options.world.join("world.meta").is_file() {
-        Some(WorldLease::acquire(&options.world).map_err(ServeError::Disk)?)
-    } else {
-        None
-    };
+    // DiskStore::open acquires WorldLease; do not pre-hold it or open WouldBlock.
 
     let config = match &options.config {
         Some(path) => RuntimeConfig::load(path).map_err(ServeError::Config)?,
