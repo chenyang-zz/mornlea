@@ -291,10 +291,36 @@ impl ActorSaveLedger {
         mode: SaveMode,
         budget: SaveBudget,
     ) -> Result<Vec<OwnedSnapshot>, ServerError> {
+        self.select_where(mode, budget, None)
+    }
+
+    /// Selects only the one target `key` names, with the same eligibility,
+    /// revision and ownership rules as [`Self::select`]. A key that is not an
+    /// actor family selects nothing.
+    pub fn select_key(
+        &mut self,
+        key: &SaveKey,
+        mode: SaveMode,
+    ) -> Result<Vec<OwnedSnapshot>, ServerError> {
+        let Some(only) = Key::from_save(key) else {
+            return Ok(Vec::new());
+        };
+        self.select_where(mode, SaveBudget::default(), Some(only))
+    }
+
+    fn select_where(
+        &mut self,
+        mode: SaveMode,
+        budget: SaveBudget,
+        only: Option<Key>,
+    ) -> Result<Vec<OwnedSnapshot>, ServerError> {
         self.check_open()?;
         let mut selected = Vec::new();
         let mut bytes = 0usize;
         for (key, entry) in &self.entries {
+            if only.is_some_and(|only| only != *key) {
+                continue;
+            }
             if !entry.eligible
                 || !entry.dirty
                 || entry.flight.is_some()

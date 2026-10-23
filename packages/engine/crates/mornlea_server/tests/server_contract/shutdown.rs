@@ -448,6 +448,22 @@ impl Harness {
         }
     }
 
+    fn ports_with<'a>(
+        &'a mut self,
+        actors: &'a mut dyn ActorPersistence,
+    ) -> provider::ShutdownPorts<'a> {
+        provider::ShutdownPorts {
+            reducer: &mut self.reducer,
+            workers: &mut self.workers,
+            actors,
+            memory: &mut self.memory,
+            store: &mut self.store,
+            agent: &mut self.agent,
+            mcp: &mut self.mcp,
+            clock: &self.clock,
+        }
+    }
+
     fn drive_state(
         &mut self,
         state: &mut AuthorityState,
@@ -1164,4 +1180,119 @@ fn mcp_close_failure_no_agent_repeat() {
     );
     assert_eq!(harness.store.close_calls, 1);
     assert_eq!(harness.workers.close_calls, 1);
+}
+
+/// Authority-aware actor double: records each family key the machine hands
+/// it with the authority it borrowed, and fails one family once. The
+/// authority-free `flush` is never a valid route for it.
+struct FamilyActors {
+    calls: Vec<SaveKey>,
+    fail_once: Option<SaveKey>,
+}
+
+impl ActorPersistence for FamilyActors {
+    fn flush(&mut self, _family: SaveKey, _deadline: Deadline) -> Result<FlushReport, ServerError> {
+        Err(unused())
+    }
+
+    fn flush_authority(
+        &mut self,
+        authority: &mut AuthorityState,
+        family: SaveKey,
+        _deadline: Deadline,
+    ) -> Result<FlushReport, ServerError> {
+        assert_eq!(authority.phase(), ServerPhase::Closing);
+        self.calls.push(family.clone());
+        if self.fail_once.as_ref() == Some(&family) {
+            self.fail_once = None;
+            return Err(ServerError::Io {
+                operation: Operation::Flush,
+                kind: std::io::ErrorKind::TimedOut,
+            });
+        }
+        Ok(FlushReport {
+            durable: 1,
+            failed: 0,
+            outstanding: 0,
+        })
+    }
+}
+
+fn player_save(tag: u8) -> mornlea_server::contracts::SaveValue {
+    mornlea_server::contracts::SaveValue::Player(mornlea_storage::PlayerSave {
+        player_id: mornlea_storage::PlayerId::from_bytes(uuid(tag)),
+        revision: 3,
+        display_name: "Ada".into(),
+        current: mornlea_storage::PlayerLocation {
+            dimension: 0,
+            position: [8.5, 65.0, 8.5],
+        },
+        yaw: 0.0,
+        pitch: 0.0,
+        safe: None,
+        inventory: mornlea_storage::Inventory::default(),
+        health: 20,
+        hunger: 20,
+        saturation_milli: 5000,
+        exhaustion_milli: 0,
+        respawn_present: false,
+        respawn_position: [0.0; 3],
+        respawn_dimension: 0,
+        armor: [Default::default(); 4],
+    })
+}
+
+#[test]
+fn family_flush_barrier_stops_at_failed_family_and_resumes_there() {
+    // Go shutdown.go:152-173 returns from the first failed family Flush, so
+    // no later family, world chunk, metadata, sync or close runs; the next
+    // Shutdown call resumes at that family. Rust keeps that barrier and
+    // never re-flushes a family that already completed.
+    let mut state = authority();
+    state.enable_live_chunks().unwrap();
+    state.enable_actor_saves().unwrap();
+    state
+        .retain_actor_save(player_save(1), 3, true, true, true)
+        .unwrap();
+    let player = SaveKey::Player(PlayerId::try_from_bytes(uuid(1)).unwrap());
+    let mut harness = Harness::new(Instant::now());
+    let mut actors = FamilyActors {
+        calls: Vec::new(),
+        fail_once: Some(SaveKey::Hostiles),
+    };
+    let deadline = harness.deadline;
+    let failure =
+        provider::shutdown(&mut state, &mut harness.ports_with(&mut actors), deadline).unwrap_err();
+    assert_eq!(failure.report.next, ShutdownPhase::FlushHostiles);
+    assert!(failure.report.retryable);
+    assert_eq!(
+        actors.calls,
+        vec![player.clone(), SaveKey::Companions, SaveKey::Hostiles]
+    );
+    for later in [
+        ShutdownPhase::FlushHostiles,
+        ShutdownPhase::FlushPassives,
+        ShutdownPhase::FlushWorld,
+        ShutdownPhase::FlushMetadata,
+        ShutdownPhase::StoreSync,
+    ] {
+        assert!(!failure.report.completed.contains(&later), "{later:?}");
+    }
+    assert_eq!(harness.store.sync_calls, 0);
+    assert_eq!(harness.agent.release_calls, 0);
+    assert_eq!(harness.agent.close_calls, 0);
+    assert_eq!(harness.mcp.close_calls, 0);
+    assert_eq!(harness.store.close_calls, 0);
+
+    actors.calls.clear();
+    let report =
+        provider::shutdown(&mut state, &mut harness.ports_with(&mut actors), deadline).unwrap();
+    assert_eq!(report.next, ShutdownPhase::Closed);
+    assert_eq!(
+        actors.calls,
+        vec![SaveKey::Hostiles, SaveKey::Passives, SaveKey::Metadata],
+        "the retry resumes at the failed family and never re-flushes players or companions"
+    );
+    assert_eq!(harness.store.sync_calls, 1);
+    assert_eq!(harness.store.close_calls, 1);
 }

@@ -2892,11 +2892,11 @@ pub trait SnapshotPort {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownPhase {
     StopAdmission,
+    FlushPlayers,
     FinalTick,
     Freeze,
     WaitWorkers,
     FinalizeMemory,
-    FlushPlayers,
     FlushCompanions,
     FlushHostiles,
     FlushPassives,
@@ -2915,11 +2915,11 @@ impl ShutdownPhase {
     pub fn successors() -> &'static [Self] {
         &[
             Self::StopAdmission,
+            Self::FlushPlayers,
             Self::FinalTick,
             Self::Freeze,
             Self::WaitWorkers,
             Self::FinalizeMemory,
-            Self::FlushPlayers,
             Self::FlushCompanions,
             Self::FlushHostiles,
             Self::FlushPassives,
@@ -2984,6 +2984,21 @@ pub trait WorkerLifecycle {
 
 pub trait ActorPersistence {
     fn flush(&mut self, family: SaveKey, deadline: Deadline) -> Result<FlushReport, ServerError>;
+    /// Flushes one save key against the authority that owns its snapshots;
+    /// the shutdown machine calls only this entry point. The default forwards
+    /// to the authority-free `flush` and exists for doubles that keep no
+    /// store. A production store must override it: without the authority it
+    /// cannot select the family's snapshot, so the fallback would write
+    /// nothing.
+    fn flush_authority(
+        &mut self,
+        authority: &mut crate::core::state::AuthorityState,
+        family: SaveKey,
+        deadline: Deadline,
+    ) -> Result<FlushReport, ServerError> {
+        let _ = authority;
+        self.flush(family, deadline)
+    }
 }
 
 pub trait McpLifecycle {

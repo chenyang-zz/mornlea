@@ -134,10 +134,19 @@ fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
     }
     assert!(runtime.agent().lease_worker_running());
 
-    runtime
-        .agent_mut()
-        .close_until(Deadline::after(Instant::now(), Duration::from_secs(5)).unwrap())
-        .expect("agent services close");
+    {
+        use mornlea_server::contracts::{AgentHandle, McpLifecycle};
+        let deadline = Deadline::after(Instant::now(), Duration::from_secs(5)).unwrap();
+        let clock = SystemClock;
+        let agent = runtime.agent_mut();
+        if let Some(lease) = agent.freeze(&clock) {
+            agent
+                .release(&lease, deadline)
+                .expect("agent lease release");
+        }
+        AgentHandle::close(agent, deadline).expect("agent lease close");
+        McpLifecycle::close(agent, deadline).expect("mcp close");
+    }
     assert_eq!(runtime.agent().lease_phase(), ControlPhase::Closed);
     disk.close().expect("disk closes");
 }

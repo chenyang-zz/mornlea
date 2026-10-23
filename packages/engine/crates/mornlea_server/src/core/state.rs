@@ -75,6 +75,8 @@ pub(crate) mod companion_planning;
 mod mob_persistence;
 #[path = "state_player_persistence.rs"]
 mod player_persistence;
+#[path = "state_shutdown_flush.rs"]
+mod shutdown_flush;
 #[path = "state_source_snapshot.rs"]
 mod source_snapshot;
 #[path = "state_source_tick.rs"]
@@ -1161,6 +1163,14 @@ impl AuthorityState {
         })
     }
 
+    /// Live session keys the runtime retires before the final shutdown tick.
+    ///
+    /// Order is ascending by key so teardown is deterministic. Retired
+    /// sessions are already absent from this set.
+    pub fn sessions_for_shutdown(&self) -> Vec<SessionKey> {
+        self.current_sessions.iter().copied().collect()
+    }
+
     /// Retires one session between ticks. A call while a tick holds the
     /// resident loan refuses with `InvalidState` and changes nothing: the
     /// loaned resident set would otherwise carry the retired actor back.
@@ -1209,6 +1219,15 @@ impl AuthorityState {
         self.residents.sleeping.remove(&key);
         self.release_player_resident(key, slot);
         self.source_players.entries.remove(&key);
+        // Drop every command and staged chat still owned by this session.
+        // No ack and no partial effect: later ticks must see a queue that
+        // never carried them. Matches Go `session_ingress.go:379-381`
+        // dropping a detached session's input before enqueue. This is
+        // session lifecycle, not a shutdown special case in the phase
+        // machine.
+        let raw = key.get();
+        self.commands.retain(|envelope| envelope.session() != raw);
+        self.chat_queue.retain(|staged| staged.session != key);
         Ok(())
     }
 
@@ -3433,27 +3452,9 @@ impl AuthorityState {
     }
 
     pub fn freeze(&mut self) -> FrozenAuthority {
-        let mut save_keys = if self.acquisition.enabled() {
-            self.acquisition.save_keys()
-        } else {
-            Vec::new()
-        };
-        // Closing preserves ledger selection until the final flush consumes it.
-        if let Some(ledger) = &self.actor_saves {
-            for key in ledger.save_keys() {
-                if !save_keys.contains(&key) {
-                    save_keys.push(key);
-                }
-            }
-        }
-        for snapshot in self.dirty.iter().chain(self.in_flight.iter()) {
-            if !save_keys.contains(&snapshot.key) {
-                save_keys.push(snapshot.key.clone());
-            }
-        }
         FrozenAuthority {
             final_tick: self.shutdown.final_tick.unwrap_or(self.next_tick),
-            save_keys,
+            save_keys: self.pending_save_keys(),
         }
     }
 
@@ -3855,6 +3856,11 @@ impl AuthorityState {
         Ok(())
     }
 
+    /// Second shutdown entry used only by tests. Production shutdown goes
+    /// through [`crate::core::shutdown::shutdown`] alone. Compiles for this
+    /// crate's unit tests and for integration tests through the
+    /// `test-support` feature, never into a production build.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn drive_shutdown(
         &mut self,
         deadline: Deadline,
@@ -3897,6 +3903,7 @@ impl AuthorityState {
         Ok(self.shutdown.clone())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn fail_shutdown(
         &mut self,
         mut report: ShutdownReport,
@@ -3913,6 +3920,7 @@ impl AuthorityState {
         Err(ShutdownFailure { error, report })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn run_shutdown_phase(
         &mut self,
         phase: ShutdownPhase,
@@ -3946,6 +3954,9 @@ impl AuthorityState {
                 super::shutdown::finalize_memory(self, io.memory, io.clock, deadline, report)
             }
             ShutdownPhase::FlushPlayers => {
+                if let Some(error) = self.tick_failure {
+                    return Err(error);
+                }
                 for (key, record) in &self.sessions {
                     if record.phase == SessionPhase::Retired {
                         continue;
@@ -4055,6 +4066,7 @@ impl AuthorityState {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn flush_family(
     io: &mut ShutdownIo<'_>,
     key: SaveKey,
@@ -4068,7 +4080,9 @@ fn flush_family(
     Ok(())
 }
 
-/// Ports used by one shutdown attempt. Reports do not own snapshots.
+/// Ports used by [`AuthorityState::drive_shutdown`]. Production builds do
+/// not compile this type; they use [`crate::core::shutdown::ShutdownPorts`].
+#[cfg(any(test, feature = "test-support"))]
 pub struct ShutdownIo<'a> {
     pub reducer: &'a mut dyn FinalReducer,
     pub store: &'a mut dyn StoreHandle,
@@ -12825,7 +12839,9 @@ mod failed_tick_tests {
             };
             let failure = result.unwrap_err();
             assert_eq!(failure.error, error);
-            assert_eq!(failure.report.next, ShutdownPhase::FinalTick);
+            // Players flush first; a failed authority stops there, before
+            // any flush I/O or final tick.
+            assert_eq!(failure.report.next, ShutdownPhase::FlushPlayers);
             assert!(!failure.report.retryable);
             assert_eq!(failure.report.completed, vec![ShutdownPhase::StopAdmission]);
             assert_eq!(failure.report.final_tick, None);

@@ -27,6 +27,7 @@ use mornlea_server::runtime::RuntimeConfig;
 use mornlea_server::runtime::companion::{
     CompanionRuntime, CompanionStartError, CompanionStartupPorts, SystemClock, start_companions,
 };
+use mornlea_server::runtime::shutdown::{TickOutcome, outcome_from_step};
 use mornlea_server::runtime::tick_loop::{ServerTick, TickStartup};
 use mornlea_server::state::AuthorityState;
 use mornlea_server::store::disk::{DiskOptions, DiskStore};
@@ -410,7 +411,14 @@ fn first_tick(state: &mut AuthorityState, disk: DiskStore) -> AutosaveScheduler<
 }
 
 fn close(mut runtime: CompanionRuntime) {
-    runtime.agent_mut().close_until(deadline()).unwrap();
+    use mornlea_server::contracts::{AgentHandle, McpLifecycle};
+    let clock = SystemClock;
+    let agent = runtime.agent_mut();
+    if let Some(lease) = agent.freeze(&clock) {
+        agent.release(&lease, deadline()).unwrap();
+    }
+    AgentHandle::close(agent, deadline()).unwrap();
+    McpLifecycle::close(agent, deadline()).unwrap();
     assert_eq!(runtime.agent().lease_phase(), ControlPhase::Closed);
 }
 
@@ -1157,4 +1165,28 @@ fn non_overworld_spawn_keeps_credential_and_load_order() {
     assert_eq!(fs::read(root.companions_file()).unwrap(), bytes);
     assert_eq!(ids.calls, 0);
     disk.close().unwrap();
+}
+
+/// Closing mid-flight: ServerTick::step's InvalidState(Closing) becomes the
+/// shutdown trigger unchanged (checklist B).
+#[test]
+fn server_tick_closing_error_is_the_shutdown_trigger() {
+    let mut state = AuthorityState::try_new(
+        ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
+        42,
+    )
+    .unwrap();
+    assert!(state.begin_close());
+    // Without companion ports, drive the same Closing refusal through the
+    // authority's ordinary tick fence that ServerTick::step also hits.
+    let err = state.advance_tick(TickBudget::full()).unwrap_err();
+    let TickOutcome::BeginShutdown(trigger) = outcome_from_step::<()>(Err(err)) else {
+        panic!("must begin shutdown");
+    };
+    assert_eq!(
+        trigger.error(),
+        ServerError::InvalidState {
+            phase: ServerPhase::Closing
+        }
+    );
 }

@@ -295,8 +295,13 @@ impl AuthorityState {
         Ok(Some(body))
     }
     /// Captures only the current indexed players after settled ordinary or final execution.
+    ///
+    /// Once the shutdown has flushed players, the saved bodies are final:
+    /// Go detaches every session and flushes players before its final step,
+    /// so that step never reaches a player file. A later capture would leave
+    /// a dirty player no flush is left to write.
     pub(crate) fn capture_player_saves(&mut self) -> Result<(), ServerError> {
-        if self.player_persistence.is_none() {
+        if self.player_persistence.is_none() || self.players_flushed_for_shutdown() {
             return Ok(());
         }
         self.require_live_chunks(false)?;
@@ -322,6 +327,12 @@ impl AuthorityState {
                 .observed = true;
         }
         Ok(())
+    }
+    /// Whether the shutdown already made the player bodies durable.
+    fn players_flushed_for_shutdown(&self) -> bool {
+        self.shutdown
+            .completed
+            .contains(&ShutdownPhase::FlushPlayers)
     }
     pub(super) fn retire_player_cache(&mut self, session: SessionKey) -> Result<(), ServerError> {
         if self.player_persistence.is_none() {

@@ -177,6 +177,29 @@ chat projector consumes IDs for wire-invalid saved command restatements and
 continues later facts. This pure task contract does not load/register actors,
 observe durable aggregate changes or compose Agent shutdown.
 
+## Shutdown family flush
+
+`core::shutdown::FLUSH_ORDER` hardcodes the save-family barrier order players,
+companions, hostiles, passives, world chunks, metadata, pinned against Go
+`host_shutdown.go:83` and `shutdown.go:152/161/169/175/179/188/193` (world
+chunks then metadata at `persistence/world.go:196/199`) by
+`core::shutdown::flush_order_tests`. Players flush right after admission
+stops and before the final tick, as Go detaches sessions and flushes players
+(`host_shutdown.go:78/83`) before `world.Shutdown` (`:93`) runs the final step
+(`shutdown.go:75`); once they are flushed the final tick captures no player
+body, so the durable player is the one the last ordinary tick settled
+(`persistence_failure::source_player_persistence::physical::actual_shutdown_saves_the_player_settled_before_the_final_step`). The pure `family_keys` selects each
+phase's keys from the frozen pending set; the machine hands every key to
+`ActorPersistence::flush_authority` with the authority. That method's default
+forwards to the authority-free `flush` for test doubles only; the production
+`store::shutdown::SchedulerActors` overrides it and writes the family before
+returning. A failed family stops the attempt there and a retry resumes at it,
+as Go returns from the first failed `Flush`.
+`tests/persistence_failure/shutdown_family_flush.rs` drives this against a
+background `DiskStore`. `AuthorityState::drive_shutdown` still calls the
+authority-free `flush`, so a production store behind it refuses rather than
+silently skipping.
+
 ## Agent boundary
 
 Immediate Open/Close use a private checked lifecycle adapter. Recognized physical
@@ -504,7 +527,8 @@ separate caller responsibilities.
   before the moved schedules and source player book return; it provides no whole-tick rollback.
   Failed authorities refuse new captures, selection and metadata targets while
   preserving already-selected immutable ownership and completion/return paths.
-  Both shutdown entries permanently stop at failed FinalTick, including a
+  Both shutdown entries permanently stop at FlushPlayers, the first phase
+  after admission stops, before any flush I/O or final tick, including a
   retained I/O error; ordinary injected lifecycle failures keep their existing
   transient classification. Cold abort/quiescence and real executable runtime
   composition remain separate acceptance work. `core::state::failed_tick_tests`,

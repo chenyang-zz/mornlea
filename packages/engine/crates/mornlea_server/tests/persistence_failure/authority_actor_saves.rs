@@ -8,14 +8,14 @@ use mornlea_storage::{
 };
 use std::collections::BTreeSet;
 
-fn id(tag: u8) -> PlayerId {
+pub(super) fn id(tag: u8) -> PlayerId {
     let mut bytes = [0; 16];
     bytes[0] = tag;
     bytes[6] = 0x40;
     bytes[8] = 0x80;
     PlayerId::try_from_bytes(bytes).unwrap()
 }
-fn player(tag: u8, revision: u64) -> SaveValue {
+pub(super) fn player(tag: u8, revision: u64) -> SaveValue {
     SaveValue::Player(PlayerSave {
         player_id: mornlea_storage::PlayerId::from_bytes(id(tag).bytes()),
         revision,
@@ -38,7 +38,7 @@ fn player(tag: u8, revision: u64) -> SaveValue {
         armor: [Default::default(); 4],
     })
 }
-fn aggregates() -> Vec<SaveValue> {
+pub(super) fn aggregates() -> Vec<SaveValue> {
     vec![
         SaveValue::Companions(CompanionSave {
             revision: 5,
@@ -57,20 +57,20 @@ fn aggregates() -> Vec<SaveValue> {
         }),
     ]
 }
-fn authority() -> AuthorityState {
+pub(super) fn authority() -> AuthorityState {
     AuthorityState::try_new(
         ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576).unwrap(),
         42,
     )
     .unwrap()
 }
-fn enabled() -> AuthorityState {
+pub(super) fn enabled() -> AuthorityState {
     let mut s = authority();
     s.enable_live_chunks().unwrap();
     s.enable_actor_saves().unwrap();
     s
 }
-fn retain_four(s: &mut AuthorityState) {
+pub(super) fn retain_four(s: &mut AuthorityState) {
     s.retain_actor_save(player(1, 9), 9, true, true, true)
         .unwrap();
     for v in aggregates() {
@@ -90,7 +90,7 @@ fn completion(snapshots: Vec<OwnedSnapshot>) -> SaveCompletion {
         error: None,
     }
 }
-fn key(x: i32) -> ChunkKey {
+pub(super) fn key(x: i32) -> ChunkKey {
     ChunkKey {
         dimension: Dimension::OVERWORLD,
         pos: ChunkPos::new(x, 0),
@@ -364,9 +364,9 @@ use std::{
     time::{Duration, Instant},
 };
 static ROOTS: AtomicU64 = AtomicU64::new(0);
-struct Root(PathBuf);
+pub(super) struct Root(pub(super) PathBuf);
 impl Root {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let p = std::env::temp_dir().join(format!(
             "actor-routing-{}-{}",
             std::process::id(),
@@ -381,10 +381,10 @@ impl Drop for Root {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn deadline() -> Deadline {
+pub(super) fn deadline() -> Deadline {
     Deadline::after(Instant::now(), Duration::from_secs(10)).unwrap()
 }
-struct RealClock;
+pub(super) struct RealClock;
 impl Clock for RealClock {
     fn monotonic(&self) -> Instant {
         Instant::now()
@@ -393,7 +393,7 @@ impl Clock for RealClock {
         0
     }
 }
-fn options() -> DiskOptions {
+pub(super) fn options() -> DiskOptions {
     DiskOptions {
         region_handle_cap: 1,
         create: mornlea_storage::Metadata {
@@ -411,7 +411,7 @@ fn options() -> DiskOptions {
         },
     }
 }
-fn fixture_target(value: SaveValue) -> OwnedSnapshot {
+pub(super) fn fixture_target(value: SaveValue) -> OwnedSnapshot {
     let (key, revision, bytes) = match &value {
         SaveValue::Player(p) => (
             SaveKey::Player(id(1)),
@@ -438,6 +438,14 @@ fn fixture_target(value: SaveValue) -> OwnedSnapshot {
     OwnedSnapshot::try_new(key, revision, bytes, SaveUrgency::Autosave, value).unwrap()
 }
 fn real_setup(root: &Root) -> (AuthorityState, AutosaveScheduler<DiskStore>) {
+    real_setup_on(root, |disk| disk)
+}
+/// Seeds the fixture families on disk, then hands the opened store to `wrap`
+/// so a case can observe or fault the backend the scheduler owns.
+pub(super) fn real_setup_on<B: DiskBackend + Send + 'static>(
+    root: &Root,
+    wrap: impl FnOnce(DiskStore) -> B,
+) -> (AuthorityState, AutosaveScheduler<B>) {
     let mut disk = DiskStore::open(&root.0, options()).unwrap();
     // These explicit source-shaped startup fixtures do not certify the loader or gameplay capture.
     let fixtures = std::iter::once(player(1, 9))
@@ -456,7 +464,7 @@ fn real_setup(root: &Root) -> (AuthorityState, AutosaveScheduler<DiskStore>) {
         SchedulerConfig::default(),
         StoreMailbox::try_new_background(
             StoreLimits::try_new(2, 16, 3, 3, 3, 1, 8, 4_194_304).unwrap(),
-            disk,
+            wrap(disk),
         )
         .unwrap(),
     )
@@ -478,10 +486,10 @@ fn real_setup(root: &Root) -> (AuthorityState, AutosaveScheduler<DiskStore>) {
     assert_eq!(s.save_stats().dirty, 5);
     (s, store)
 }
-fn drain_driver(
+fn drain_driver<B: DiskBackend>(
     driver: &mut ChunkDriver,
     s: &mut AuthorityState,
-    store: &mut AutosaveScheduler<DiskStore>,
+    store: &mut AutosaveScheduler<B>,
     pool: &mut GenerationPool,
 ) {
     let until = deadline();
@@ -496,7 +504,7 @@ fn drain_driver(
         thread::yield_now();
     }
 }
-fn reopen(root: &Root, s: &AuthorityState) {
+pub(super) fn reopen(root: &Root, s: &AuthorityState) {
     let captured = s
         .capture_chunk_snapshot(key(0), SaveUrgency::Autosave)
         .unwrap();

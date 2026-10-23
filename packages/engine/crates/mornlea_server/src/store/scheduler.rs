@@ -31,9 +31,11 @@ use std::collections::HashMap;
 use crate::core::contracts::{
     AckReport, ChunkKey, ChunkLoadPoll, ChunkLoadPort, ChunkRequestId, Clock, Deadline,
     DiskBackend, FlushReport, LoadPoll, LoginTicket, OwnedSnapshot, SaveAuthority, SaveBudget,
-    SaveCompletion, SaveMode, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket, ServerError,
-    StoreHandle, SubmitSaveError,
+    SaveCompletion, SaveKey, SaveMode, SavePoll, SaveRequest, SaveScheduleReport, SaveTicket,
+    ServerError, ShutdownPhase, StoreHandle, SubmitSaveError,
 };
+use crate::core::shutdown::flush_phase;
+use crate::core::state::AuthorityState;
 use crate::store::mailbox::StoreMailbox;
 
 /// Checked scheduler tuning. Defaults follow the Go server configuration:
@@ -651,6 +653,193 @@ impl<B: DiskBackend> AutosaveScheduler<B> {
         }
         Ok(())
     }
+
+    /// Final metadata barrier: submits the frozen metadata target when it is
+    /// newer than the committed sequence and waits for its own ticket.
+    fn flush_metadata(
+        &mut self,
+        deadline: Deadline,
+        authority: &mut dyn SaveAuthority,
+        clock: &dyn Clock,
+        report: &mut FlushReport,
+    ) -> Result<(), ServerError> {
+        let snapshot = authority.try_metadata_snapshot().inspect_err(|error| {
+            self.metadata.pending = true;
+            self.last_error = Some(*error);
+        })?;
+        if snapshot.revision > self.metadata.committed {
+            self.store.check_flush_deadline(deadline, clock)?;
+            let sequence = snapshot.revision;
+            let ticket = match self.store.submit(SaveRequest {
+                snapshots: vec![snapshot],
+            }) {
+                Ok(ticket) => ticket,
+                Err(refused) => {
+                    self.metadata.pending = true;
+                    self.last_error = Some(refused.error);
+                    return Err(refused.error);
+                }
+            };
+            // Record ownership before any wait. A timed-out flush retries by
+            // draining this ticket before selecting another metadata target.
+            self.metadata.in_flight = true;
+            self.metadata.pending = false;
+            self.tracked.push(TrackedSubmit {
+                ticket,
+                kind: TrackedKind::Metadata { sequence },
+            });
+            loop {
+                self.store.check_flush_deadline(deadline, clock)?;
+                self.store.poll_tick(0, SaveBudget::default(), authority)?;
+                self.store.drive_workers();
+                if let Some(error) =
+                    self.drain_ready(authority, 0, &mut report.durable, &mut report.failed)
+                {
+                    return Err(error);
+                }
+                if !self.tracked.iter().any(|tracked| tracked.ticket == ticket) {
+                    break;
+                }
+                self.store.wait_flush(deadline, clock)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Flushes exactly one save key for the shutdown family barrier.
+    ///
+    /// Only the requested key is selected from the authority, and only retry
+    /// cohorts of the same flush phase are dispatched (a mixed cohort is split
+    /// first), so no later family reaches the backend early. The call returns
+    /// only once every tracked ticket has drained and the authority reports
+    /// nothing pending for the key; a failed completion returns its error with
+    /// the uncommitted originals kept as retry cohorts for the next attempt.
+    /// Metadata runs the final metadata barrier instead.
+    pub fn flush_family(
+        &mut self,
+        deadline: Deadline,
+        authority: &mut AuthorityState,
+        family: &SaveKey,
+        clock: &dyn Clock,
+    ) -> Result<FlushReport, ServerError> {
+        let mut report = FlushReport::default();
+        if *family == SaveKey::Metadata {
+            self.flush_metadata(deadline, authority, clock, &mut report)?;
+            report.outstanding = self.tracked.len() + self.pending.len();
+            return Ok(report);
+        }
+        let phase = flush_phase(family);
+        let mut last_refusal: Option<ServerError> = None;
+        loop {
+            self.store.check_flush_deadline(deadline, clock)?;
+            let selected = authority.select_family(family);
+            let mut submitted = false;
+            if !selected.is_empty() {
+                match self.submit_prefix(SaveRequest {
+                    snapshots: selected,
+                }) {
+                    Ok((ticket, tail)) => {
+                        self.tracked.push(TrackedSubmit {
+                            ticket,
+                            kind: TrackedKind::Fresh,
+                        });
+                        submitted = true;
+                        for snapshot in tail {
+                            authority.return_dirty(snapshot);
+                        }
+                    }
+                    Err(refused) => {
+                        last_refusal = Some(refused.error);
+                        for snapshot in refused.request.snapshots {
+                            authority.return_dirty(snapshot);
+                        }
+                    }
+                }
+            }
+            if self.dispatch_phase_retries(phase) {
+                submitted = true;
+            }
+            self.store.poll_tick(0, SaveBudget::default(), authority)?;
+            self.store.drive_workers();
+            let durable_before_drain = report.durable;
+            if let Some(error) =
+                self.drain_ready(authority, 0, &mut report.durable, &mut report.failed)
+            {
+                return Err(error);
+            }
+            if self.tracked.is_empty() && !self.pending_in_phase(phase) {
+                if !authority.has_pending_save(family) {
+                    break;
+                }
+                if !submitted && report.durable == durable_before_drain {
+                    return Err(last_refusal.unwrap_or(ServerError::Internal {
+                        invariant: "flush stalled",
+                    }));
+                }
+            }
+            if self.store.is_background() {
+                self.store.wait_flush(deadline, clock)?;
+            }
+        }
+        report.outstanding = self.tracked.len() + self.pending.len();
+        Ok(report)
+    }
+
+    /// Whether a waiting retry cohort holds any snapshot of `phase`.
+    fn pending_in_phase(&self, phase: ShutdownPhase) -> bool {
+        self.pending.iter().any(|cohort| {
+            cohort
+                .snapshots
+                .iter()
+                .any(|snapshot| flush_phase(&snapshot.key) == phase)
+        })
+    }
+
+    /// Dispatches, oldest first, the retry cohorts that hold snapshots of
+    /// `phase`. A cohort mixing families is split: the other families keep
+    /// their attempt and deadline in a new waiting cohort. A refusal stops
+    /// with the remainder preserved.
+    fn dispatch_phase_retries(&mut self, phase: ShutdownPhase) -> bool {
+        let mut order: Vec<(u64, u64)> = self
+            .pending
+            .iter()
+            .filter(|cohort| {
+                cohort
+                    .snapshots
+                    .iter()
+                    .any(|snapshot| flush_phase(&snapshot.key) == phase)
+            })
+            .map(|cohort| (cohort.next_tick, cohort.id))
+            .collect();
+        order.sort();
+        let mut submitted = false;
+        for (_, id) in order {
+            let Some(position) = self.pending.iter().position(|cohort| cohort.id == id) else {
+                continue;
+            };
+            let mut cohort = self.pending.remove(position);
+            let (inside, outside): (Vec<_>, Vec<_>) = cohort
+                .snapshots
+                .drain(..)
+                .partition(|snapshot| flush_phase(&snapshot.key) == phase);
+            cohort.snapshots = inside;
+            if !outside.is_empty() {
+                let id = self.allocate_retry_id();
+                self.pending.push(PendingRetry {
+                    id,
+                    attempts: cohort.attempts,
+                    next_tick: cohort.next_tick,
+                    snapshots: outside,
+                });
+            }
+            let (count, stop) = self.dispatch_retry(cohort);
+            submitted |= count > 0;
+            if stop {
+                break;
+            }
+        }
+        submitted
+    }
 }
 
 impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
@@ -781,46 +970,7 @@ impl<B: DiskBackend> StoreHandle for AutosaveScheduler<B> {
             }
         }
         // The final metadata barrier runs after chunk work drains.
-        let snapshot = authority.try_metadata_snapshot().inspect_err(|error| {
-            self.metadata.pending = true;
-            self.last_error = Some(*error);
-        })?;
-        if snapshot.revision > self.metadata.committed {
-            self.store.check_flush_deadline(deadline, clock)?;
-            let sequence = snapshot.revision;
-            let ticket = match self.store.submit(SaveRequest {
-                snapshots: vec![snapshot],
-            }) {
-                Ok(ticket) => ticket,
-                Err(refused) => {
-                    self.metadata.pending = true;
-                    self.last_error = Some(refused.error);
-                    return Err(refused.error);
-                }
-            };
-            // Record ownership before any wait. A timed-out flush retries by
-            // draining this ticket before selecting another metadata target.
-            self.metadata.in_flight = true;
-            self.metadata.pending = false;
-            self.tracked.push(TrackedSubmit {
-                ticket,
-                kind: TrackedKind::Metadata { sequence },
-            });
-            loop {
-                self.store.check_flush_deadline(deadline, clock)?;
-                self.store.poll_tick(0, SaveBudget::default(), authority)?;
-                self.store.drive_workers();
-                if let Some(error) =
-                    self.drain_ready(authority, 0, &mut report.durable, &mut report.failed)
-                {
-                    return Err(error);
-                }
-                if !self.tracked.iter().any(|tracked| tracked.ticket == ticket) {
-                    break;
-                }
-                self.store.wait_flush(deadline, clock)?;
-            }
-        }
+        self.flush_metadata(deadline, authority, clock, &mut report)?;
         report.outstanding = self.tracked.len() + self.pending.len();
         Ok(report)
     }

@@ -84,7 +84,7 @@ fn empty_dispatch_runs_no_provider_with_empty_publication() {
 }
 
 #[test]
-fn retired_session_commands_drop_stale_never_carried() {
+fn retired_session_commands_are_discarded_on_retire() {
     let mut state = authority();
     let key = state
         .admit(login(21, "Retired"), TransportKind::Memory)
@@ -94,15 +94,17 @@ fn retired_session_commands_drop_stale_never_carried() {
     state
         .close_session(key, mornlea_server::contracts::CloseReason::PeerGone)
         .unwrap();
+    // Retire drops that session's queued envelopes on the input side (Go
+    // session_ingress detach). The next tick never observes them as stale
+    // carry — the queue never held them past retire.
     let publication = reduce_tick(&mut state, full()).unwrap();
-    assert_eq!(publication.counters.commands, 2, "both envelopes drain");
-    assert_eq!(publication.counters.stale, 2, "retired commands drop stale");
+    assert_eq!(publication.counters.commands, 0, "retire emptied the queue");
+    assert_eq!(publication.counters.stale, 0);
     assert_eq!(publication.counters.carried, 0);
     assert!(
         publication.events.is_empty(),
         "a retired session executes nothing"
     );
-    // A retired session never returns: the next tick drains nothing.
     let again = reduce_tick(&mut state, full()).unwrap();
     assert_eq!(again.counters.commands, 0);
     assert_eq!(again.counters.stale, 0);
