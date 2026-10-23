@@ -1767,6 +1767,41 @@ impl AuthorityState {
         self.companion_chat.queue_view(id)
     }
 
+    /// Slot generation for dialogue dispatch when no current task is held.
+    pub fn companion_chat_generation(&self, id: CompanionId) -> Option<u64> {
+        self.companion_chat.slot_generation(id)
+    }
+
+    /// Publishes one companion speech line as a broadcast chat fact.
+    ///
+    /// Expression-plane only: does not mutate tasks, FIFO, path, or world.
+    /// The issuer names the chat envelope; the companion speaks the line.
+    pub fn publish_companion_speech(
+        &mut self,
+        companion: CompanionId,
+        line: &str,
+        issuer: &CompanionChatIssuer,
+    ) -> Result<(), ServerError> {
+        let text = mornlea_domain::SpeechText::try_from_canonical(line.to_owned()).map_err(
+            |_| ServerError::InvalidInput {
+                field: "dialogue_line",
+            },
+        )?;
+        let speaker = self.companion_chat.speaker(companion).ok_or(
+            ServerError::InvalidInput {
+                field: "companion_speech",
+            },
+        )?;
+        self.companion_chat.push_decided(DecidedChatFact::broadcast(
+            issuer.player_id,
+            issuer.player_name.clone(),
+            ChatBody::Speech {
+                companion: speaker,
+                text,
+            },
+        ))
+    }
+
     /// Takes the current queued task into planning, returning it exactly once.
     ///
     /// Only a current `Queued` task with a live `Active` companion actor

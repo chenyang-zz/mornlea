@@ -234,8 +234,8 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
         )
         .map_err(ServeError::Authority)?;
     // Executable adoption of the trusted-observer library (Owen): serve
-    // enables the flag so attach/center APIs are live; host Attach endpoint
-    // wiring stays a stacked follow-up.
+    // enables the flag; host Attach/center/close is runtime::trusted_observer
+    // (callers attach an ObserverEndpoint when they have a peer).
     authority
         .set_trusted_observer_enabled(true)
         .map_err(ServeError::Authority)?;

@@ -253,6 +253,11 @@ impl CompanionChatBook {
         })
     }
 
+    /// Generation counter for the companion slot (survives an empty current).
+    pub(crate) fn slot_generation(&self, id: CompanionId) -> Option<u64> {
+        Some(self.slots.get(&id)?.generation)
+    }
+
     /// Speaker for one configured companion.
     pub(crate) fn speaker(&self, id: CompanionId) -> Option<CompanionSpeaker> {
         Some(CompanionSpeaker::new(id, self.configured.get(&id)?.clone()))
