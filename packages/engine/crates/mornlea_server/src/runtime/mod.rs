@@ -7,13 +7,15 @@
 //! holds pending path searches between tick boundaries for the core task
 //! runner; `companion_planning` assembles the companion plan loop over
 //! the Agent host and the task runner; `tick_loop` composes one production
-//! tick over the plan loop and the authority. Shutdown ports and tick
-//! pacing land in later PRs.
+//! tick over the plan loop and the authority; `shutdown` tears sessions
+//! down and hands tick errors into the core shutdown machine. Tick
+//! pacing lands in the executable-entry PR.
 
 pub mod companion;
 pub mod companion_planning;
 pub mod companion_runner;
 pub mod config;
+pub mod shutdown;
 pub mod tick_loop;
 
 pub use config::{

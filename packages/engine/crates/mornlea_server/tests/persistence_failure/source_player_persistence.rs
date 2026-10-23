@@ -1162,6 +1162,293 @@ mod physical {
         reopened.close().unwrap();
     }
 
+
+
+
+    fn place_scene_chunk() -> Chunk {
+        use mornlea_domain::{chunk_block_index, BlockPos};
+        use mornlea_storage::{ContainerSnapshot, StorageKind};
+        const AIR: u16 = 0;
+        const GRASS: u16 = 4;
+        const STONE: u16 = 2;
+        let mut chunk = Chunk {
+            sections: vec![
+                ContainerSnapshot {
+                    kind: StorageKind::Single,
+                    bits: 0,
+                    single: AIR,
+                    palette: vec![],
+                    packed: vec![],
+                };
+                24
+            ],
+            drops: vec![Default::default(); 32],
+            furnaces: vec![Default::default(); 32],
+            chests: vec![Default::default(); 16],
+        };
+        for x in 0..16 {
+            for z in 0..16 {
+                let index = chunk_block_index(BlockPos::new(x, 63, z)) as usize;
+                let section = &mut chunk.sections[index / 4096];
+                if section.kind == StorageKind::Single {
+                    *section = ContainerSnapshot {
+                        kind: StorageKind::Direct,
+                        bits: 15,
+                        single: 0,
+                        palette: vec![],
+                        packed: vec![0; 1024],
+                    };
+                }
+                section.packed[(index % 4096) / 4] |= u64::from(GRASS) << ((index % 4) * 15);
+            }
+        }
+        let wall_idx = chunk_block_index(BlockPos::new(8, 65, 10)) as usize;
+        let section = &mut chunk.sections[wall_idx / 4096];
+        if section.kind == StorageKind::Single {
+            *section = ContainerSnapshot {
+                kind: StorageKind::Direct,
+                bits: 15,
+                single: 0,
+                palette: vec![],
+                packed: vec![0; 1024],
+            };
+        }
+        for pos in [BlockPos::new(8, 65, 10), BlockPos::new(8, 64, 9)] {
+            let index = chunk_block_index(pos) as usize;
+            let section = &mut chunk.sections[index / 4096];
+            section.packed[(index % 4096) / 4] |= u64::from(STONE) << ((index % 4) * 15);
+        }
+        chunk
+    }
+
+    fn block_in_chunk(chunk: &Chunk, pos: mornlea_domain::BlockPos) -> u16 {
+        use mornlea_domain::chunk_block_index;
+        use mornlea_storage::StorageKind;
+        let index = chunk_block_index(pos) as usize;
+        let section = &chunk.sections[index / 4096];
+        let cell = index % 4096;
+        match section.kind {
+            StorageKind::Single => section.single,
+            StorageKind::Direct => {
+                let word = section.packed[cell / 4];
+                ((word >> ((cell % 4) * 15)) & 0x7FFF) as u16
+            }
+            StorageKind::Indexed => panic!("indexed not used"),
+        }
+    }
+
+    fn fixture_with_queued_place(clock: &StepClock) -> (Fixture, AuthorityState, ChunkKey) {
+        use mornlea_domain::{Command, LookAngles, PlacementIntent};
+        use mornlea_protocol::PlayIntent;
+        let chunk_key = key(Dimension::OVERWORLD, 0, 0);
+        let mut save = saved_player();
+        save.inventory.hotbar.selected = 0;
+        save.inventory.hotbar.slots[0] = ItemStack {
+            item: 1,
+            count: 8,
+            durability: 0,
+        };
+        save.inventory.hotbar.slots[3] = ItemStack::default();
+        save.current.position = [8.5, 64.0, 8.5];
+        save.yaw = std::f32::consts::PI;
+        save.pitch = 0.0;
+        let (mut fixture, mut state) = Fixture::new(
+            Some(save),
+            Dimension::OVERWORLD,
+            ChunkPos::new(0, 0),
+            vec![(chunk_key, place_scene_chunk())],
+        );
+        let mut login = LoginDriver::new();
+        let (_memory, session) = connect(
+            &mut fixture,
+            &mut state,
+            &mut login,
+            TransportKind::Memory,
+            1,
+            clock,
+        );
+        fixture.acquire(&mut state, chunk_key);
+        state
+            .accept(
+                session,
+                PlayIntent::Sequenced {
+                    sequence: 1,
+                    command: Command::PlaceBlock(
+                        PlacementIntent::try_new(
+                            LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap(),
+                            0,
+                        )
+                        .unwrap(),
+                    ),
+                },
+            )
+            .unwrap();
+        (fixture, state, chunk_key)
+    }
+
+    /// Queued place-block at shutdown must not appear in the saved world.
+    /// Runtime retires sessions (discarding commands) before the final tick;
+    /// skipping `teardown_sessions` in `run_shutdown` turns this RED (witness:
+    /// `queued_place_lands_in_saved_world_when_teardown_is_skipped`).
+    #[test]
+    fn actual_shutdown_discards_queued_place_before_final_tick_world_save() {
+        use mornlea_domain::BlockPos;
+        use mornlea_server::runtime::shutdown::{RuntimeShutdownPorts, run_shutdown};
+
+        const AIR: u16 = 0;
+        let clock = StepClock(Instant::now());
+        let (mut fixture, mut state, chunk_key) = fixture_with_queued_place(&clock);
+
+        let mut actors = FamilyFlush {
+            store: &mut fixture.store,
+            clock: &clock,
+        };
+        let (mut reducer, mut idle, mut workers, mut memory_port, mut agent, mut mcp) =
+            (AuthoritativeFinalReducer, IdleStore, Idle, Idle, Idle, Idle);
+        let mut ports = RuntimeShutdownPorts {
+            reducer: &mut reducer,
+            workers: &mut workers,
+            actors: &mut actors,
+            memory: &mut memory_port,
+            store: &mut idle,
+            agent: &mut agent,
+            mcp: &mut mcp,
+            clock: &clock,
+        };
+        // Production path: teardown_sessions inside run_shutdown discards the
+        // queued place before FinalTick.
+        let report = run_shutdown(&mut state, &mut ports, deadline(), None).unwrap();
+        assert_eq!(report.next, ShutdownPhase::Closed);
+        assert!(report.final_tick.is_some());
+
+        fixture.store.sync(deadline()).unwrap();
+        fixture.store.close(deadline()).unwrap();
+        let mut reopened = DiskStore::open(
+            &fixture.root.0,
+            options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
+        )
+        .unwrap();
+        let LoadedValue::Chunk(durable) = reopened.load(SaveKey::Chunk(chunk_key)).unwrap() else {
+            panic!("durable chunk");
+        };
+        let target = BlockPos::new(8, 65, 9);
+        assert_eq!(
+            block_in_chunk(&durable.chunk, target),
+            AIR,
+            "saved world must not contain the queued place at {target:?}"
+        );
+        reopened.close().unwrap();
+    }
+
+    /// Skip-teardown mutation witness: FinalTick applies the queued place and
+    /// FlushWorld persists it. Production `run_shutdown` calls teardown first.
+    #[test]
+    fn queued_place_lands_in_saved_world_when_teardown_is_skipped() {
+        use mornlea_domain::BlockPos;
+        use mornlea_server::core::shutdown::{ShutdownPorts, shutdown};
+
+        const AIR: u16 = 0;
+        let clock = StepClock(Instant::now());
+        let (mut fixture, mut state, chunk_key) = fixture_with_queued_place(&clock);
+
+        let mut actors = FamilyFlush {
+            store: &mut fixture.store,
+            clock: &clock,
+        };
+        let (mut reducer, mut idle, mut workers, mut memory_port, mut agent, mut mcp) =
+            (AuthoritativeFinalReducer, IdleStore, Idle, Idle, Idle, Idle);
+        let mut ports = ShutdownPorts {
+            reducer: &mut reducer,
+            workers: &mut workers,
+            actors: &mut actors,
+            memory: &mut memory_port,
+            store: &mut idle,
+            agent: &mut agent,
+            mcp: &mut mcp,
+            clock: &clock,
+        };
+        let report = shutdown(&mut state, &mut ports, deadline()).unwrap();
+        assert_eq!(report.next, ShutdownPhase::Closed);
+
+        fixture.store.sync(deadline()).unwrap();
+        fixture.store.close(deadline()).unwrap();
+        let mut reopened = DiskStore::open(
+            &fixture.root.0,
+            options(Dimension::OVERWORLD, ChunkPos::new(0, 0)),
+        )
+        .unwrap();
+        let LoadedValue::Chunk(durable) = reopened.load(SaveKey::Chunk(chunk_key)).unwrap() else {
+            panic!("durable chunk");
+        };
+        let target = BlockPos::new(8, 65, 9);
+        assert_ne!(
+            block_in_chunk(&durable.chunk, target),
+            AIR,
+            "skip-teardown witness: place must land in the saved world"
+        );
+        reopened.close().unwrap();
+    }
+
+    /// Ordinary-tick geometry pin for the shutdown place-block tests above.
+    #[test]
+    fn ordinary_tick_places_stone_against_south_wall() {
+        use mornlea_domain::{BlockPos, Command, LookAngles, PlacementIntent};
+        use mornlea_protocol::PlayIntent;
+
+        const STONE: u16 = 2;
+        let chunk_key = key(Dimension::OVERWORLD, 0, 0);
+        let mut save = saved_player();
+        save.inventory.hotbar.selected = 0;
+        save.inventory.hotbar.slots[0] = ItemStack {
+            item: 1,
+            count: 8,
+            durability: 0,
+        };
+        save.inventory.hotbar.slots[3] = ItemStack::default();
+        save.current.position = [8.5, 64.0, 8.5];
+        save.yaw = std::f32::consts::PI;
+        save.pitch = 0.0;
+        let (mut fixture, mut state) = Fixture::new(
+            Some(save),
+            Dimension::OVERWORLD,
+            ChunkPos::new(0, 0),
+            vec![(chunk_key, place_scene_chunk())],
+        );
+        let mut login = LoginDriver::new();
+        let clock = StepClock(Instant::now());
+        let (_memory, session) = connect(
+            &mut fixture,
+            &mut state,
+            &mut login,
+            TransportKind::Memory,
+            1,
+            &clock,
+        );
+        fixture.acquire(&mut state, chunk_key);
+        state
+            .accept(
+                session,
+                PlayIntent::Sequenced {
+                    sequence: 1,
+                    command: Command::PlaceBlock(
+                        PlacementIntent::try_new(
+                            LookAngles::try_new(std::f32::consts::PI, 0.0).unwrap(),
+                            0,
+                        )
+                        .unwrap(),
+                    ),
+                },
+            )
+            .unwrap();
+        state.advance_tick(TickBudget::full()).unwrap();
+        let target = BlockPos::new(8, 65, 9);
+        assert_eq!(
+            state.settled_read().unwrap().block(Dimension::OVERWORLD, target),
+            Some(STONE),
+            "ordinary tick must place stone at {target:?}"
+        );
+    }
+
     /// Hands each family to the production per-family flush barrier.
     struct FamilyFlush<'a> {
         store: &'a mut AutosaveScheduler<CountingDisk>,
