@@ -47,11 +47,42 @@ use crate::store::shutdown::SharedScheduler;
 use crate::transport::live::LoginDriver;
 use crate::transport::tcp::TcpTransport;
 
+
+/// Install SIGINT/SIGTERM handlers that set `stop`, so production `--serve`
+/// without `--max-ticks` exits on operator / control-plane shutdown (Go parity).
+/// Call once from the binary before [`run`].
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub fn arm_stop_on_unix_signal(stop: Arc<AtomicBool>) {
+    use std::sync::OnceLock;
+    static SLOT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    let _ = SLOT.set(stop);
+
+    extern "C" fn on_signal(_: libc::c_int) {
+        if let Some(flag) = SLOT.get() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // SAFETY: signal(2) installs a process-wide handler; the handler only
+    // SeqCst-stores an AtomicBool (async-signal-safe) and touches no locks.
+    unsafe {
+        let handler = on_signal as *const () as usize;
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn arm_stop_on_unix_signal(_stop: Arc<AtomicBool>) {}
+
 /// Flags the binary parsed for gameplay serve.
 pub struct ServeOptions {
     pub world: PathBuf,
     pub listen: SocketAddr,
-    pub max_ticks: u64,
+    /// When `Some(n)`, stop after `n` ticks (smoke/tests). `None` runs until
+    /// [`arm_stop_on_unix_signal`] / the `stop` flag (production control-plane).
+    pub max_ticks: Option<u64>,
     pub config: Option<PathBuf>,
 }
 
@@ -159,7 +190,8 @@ fn store_limits() -> Result<StoreLimits, ServeError> {
 
 /// Opens DiskStore, enables persistence, optionally starts companions, binds
 /// TCP, and runs [`ServerTick::step`] under the 20 TPS wall-clock host until
-/// `max_ticks` or `stop` is set. Returns the number of ticks executed.
+/// `stop` is set, or until optional `max_ticks` (smoke/tests only). Returns
+/// the number of ticks executed.
 pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeError> {
     let _ = std::fs::create_dir_all(&options.world);
     // DiskStore::open acquires WorldLease; do not pre-hold it or open WouldBlock.
@@ -261,7 +293,15 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
 
     run_paced_loop(
         HostTickScheduler::new(WallClock),
-        |_| stop_flag.load(Ordering::SeqCst) || ticks_for_stop.load(Ordering::SeqCst) >= tick_cap,
+        |_| {
+            if stop_flag.load(Ordering::SeqCst) {
+                return true;
+            }
+            match tick_cap {
+                Some(cap) => ticks_for_stop.load(Ordering::SeqCst) >= cap,
+                None => false,
+            }
+        },
         || {
             if let Ok(Some(id)) =
                 transport.accept_one(&mut login.bind(&mut authority, &mut scheduler), &clock)
@@ -650,12 +690,7 @@ mod tests {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime/serve.rs"),
         )
         .unwrap();
-        let production: String = serve
-            .lines()
-            .take_while(|line| !line.contains("#[cfg(test)]"))
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production = production_source(&serve);
         assert!(
             !production.contains("advance_tick_full"),
             "production serve must drive ServerTick::step, not advance_tick_full"
@@ -666,5 +701,75 @@ mod tests {
             production.contains("tick.step(") || production.contains("ServerTick"),
             "production serve must call ServerTick::step"
         );
+    }
+
+    /// Drop `#[cfg(test)]` items (brace-matched) and line comments so an early
+    /// test module cannot hide later production source from the guard.
+    fn production_source(text: &str) -> String {
+        strip_cfg_test_items(text)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn strip_cfg_test_items(source: &str) -> String {
+        let lines: Vec<&str> = source.lines().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim_start();
+            // Same-line form: `#[cfg(test)] hooks: ...` — drop the whole line.
+            if trimmed.starts_with("#[cfg(test)]") && trimmed != "#[cfg(test)]" {
+                i += 1;
+                continue;
+            }
+            if trimmed == "#[cfg(test)]" {
+                i = skip_cfg_test_item(&lines, i);
+                continue;
+            }
+            out.push(lines[i]);
+            i += 1;
+        }
+        out.join("\n")
+    }
+
+    fn skip_cfg_test_item(lines: &[&str], start: usize) -> usize {
+        let mut i = start + 1;
+        while i < lines.len() {
+            let t = lines[i].trim_start();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= lines.len() {
+            return i;
+        }
+        let mut depth = 0isize;
+        let mut seen_brace = false;
+        while i < lines.len() {
+            let line = lines[i];
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        seen_brace = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            i += 1;
+            let t = line.trim_end();
+            if !seen_brace && (t.ends_with(';') || t.ends_with(',')) {
+                break;
+            }
+            if seen_brace && depth <= 0 {
+                break;
+            }
+        }
+        i
     }
 }

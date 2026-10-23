@@ -1430,13 +1430,7 @@ mod tests {
                 continue;
             }
             let text = fs::read_to_string(&entry).unwrap();
-            // Production slice: drop everything after a #[cfg(test)] module fence.
-            let production: String = text
-                .lines()
-                .take_while(|line| !line.contains("#[cfg(test)]"))
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let production = production_source(&text);
             if production.contains("TickBudget::try_new") || production.contains("TickBudget::full")
             {
                 offenders.push(rel);
@@ -1463,12 +1457,7 @@ mod tests {
                 continue;
             }
             let text = fs::read_to_string(&entry).unwrap();
-            let production: String = text
-                .lines()
-                .take_while(|line| !line.contains("#[cfg(test)]"))
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let production = production_source(&text);
             if production.contains("advance_tick_full") {
                 offenders.push(rel);
             }
@@ -1476,13 +1465,7 @@ mod tests {
         // Also scan the binary.
         let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/mornlea-server.rs");
         let bin_text = fs::read_to_string(&bin).unwrap();
-        let bin_prod: String = bin_text
-            .lines()
-            .take_while(|line| !line.contains("#[cfg(test)]"))
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if bin_prod.contains("advance_tick_full") {
+        if production_source(&bin_text).contains("advance_tick_full") {
             offenders.push("bin/mornlea-server.rs".into());
         }
         assert!(
@@ -1532,6 +1515,100 @@ mod tests {
             offenders.is_empty(),
             "Cargo.toml outside mornlea_server must not enable test-support: {offenders:?}"
         );
+    }
+
+
+    /// Comment-stripped production source: removes `#[cfg(test)]` items by
+    /// brace-matching (and `;` / `,` one-liners) so an early test module cannot
+    /// hide later production code from the guards (Miles: scan full production).
+    fn production_source(text: &str) -> String {
+        strip_cfg_test_items(text)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn strip_cfg_test_items(source: &str) -> String {
+        let lines: Vec<&str> = source.lines().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim_start();
+            if trimmed.starts_with("#[cfg(test)]") && trimmed != "#[cfg(test)]" {
+                i += 1;
+                continue;
+            }
+            if trimmed == "#[cfg(test)]" {
+                i = skip_cfg_test_item(&lines, i);
+                continue;
+            }
+            out.push(lines[i]);
+            i += 1;
+        }
+        out.join("\n")
+    }
+
+    fn skip_cfg_test_item(lines: &[&str], start: usize) -> usize {
+        let mut i = start + 1;
+        while i < lines.len() {
+            let t = lines[i].trim_start();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= lines.len() {
+            return i;
+        }
+        let mut depth = 0isize;
+        let mut seen_brace = false;
+        while i < lines.len() {
+            let line = lines[i];
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        seen_brace = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            i += 1;
+            let t = line.trim_end();
+            if !seen_brace && (t.ends_with(';') || t.ends_with(',')) {
+                break;
+            }
+            if seen_brace && depth <= 0 {
+                break;
+            }
+        }
+        i
+    }
+
+    #[test]
+    fn production_source_keeps_code_after_early_cfg_test_module() {
+        let sample = r#"
+fn production_one() {}
+#[cfg(test)]
+mod early_tests {
+    fn hidden() { advance_tick_full(); }
+}
+fn production_two() { TickBudget::full(); }
+#[cfg(test)]
+mod late_tests {
+    fn also_hidden() {}
+}
+"#;
+        let prod = production_source(sample);
+        assert!(prod.contains("production_one"), "{prod}");
+        assert!(prod.contains("production_two"), "{prod}");
+        assert!(prod.contains("TickBudget::full"), "{prod}");
+        assert!(!prod.contains("advance_tick_full"), "{prod}");
+        assert!(!prod.contains("early_tests"), "{prod}");
+        assert!(!prod.contains("late_tests"), "{prod}");
     }
 
     /// Source text without line comments, whitespace collapsed to single

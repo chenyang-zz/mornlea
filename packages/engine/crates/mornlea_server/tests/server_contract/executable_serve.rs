@@ -70,6 +70,101 @@ fn serve_mode_runs_max_ticks_and_exits() {
     );
 }
 
+/// Production path: omit `--max-ticks`; SIGTERM must stop the paced loop
+/// (Miles/Owen Approve: serve runs until control-plane shutdown).
+#[test]
+fn serve_mode_without_max_ticks_stops_on_sigterm() {
+    let bin = env!("CARGO_BIN_EXE_mornlea-server");
+    let root = tempfile_world("sigterm-stop");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let listen = format!("127.0.0.1:{port}");
+    let mut child = Command::new(bin)
+        .args([
+            "--serve",
+            "--world",
+            root.to_str().unwrap(),
+            "--listen",
+            &listen,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mornlea-server --serve without --max-ticks");
+
+    let stdout_pipe = child.stdout.take().expect("stdout pipe");
+    let ready_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ready_flag_bg = std::sync::Arc::clone(&ready_flag);
+    let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stdout_buf_bg = std::sync::Arc::clone(&stdout_buf);
+    std::thread::spawn(move || {
+        let mut reader = stdout_pipe;
+        let mut chunk = [0u8; 512];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&chunk[..n]);
+                    let mut guard = stdout_buf_bg.lock().unwrap();
+                    guard.push_str(&text);
+                    if guard.contains("serve ready") {
+                        ready_flag_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let ready_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if Instant::now() > ready_deadline {
+            let _ = child.kill();
+            let captured = stdout_buf.lock().unwrap().clone();
+            panic!("server never printed serve ready; stdout={captured}");
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            let captured = stdout_buf.lock().unwrap().clone();
+            panic!("server exited before ready: {status}; stdout={captured}");
+        }
+        if ready_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let pid = child.id().to_string();
+    let kill_status = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .expect("spawn kill -TERM");
+    assert!(kill_status.success(), "kill -TERM failed: {kill_status}");
+
+    let exit_deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > exit_deadline {
+            let _ = child.kill();
+            let captured = stdout_buf.lock().unwrap().clone();
+            panic!("server did not exit after SIGTERM; stdout={captured}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "expected clean exit after SIGTERM, got {status}; stdout={}",
+        stdout_buf.lock().unwrap()
+    );
+    let captured = stdout_buf.lock().unwrap().clone();
+    assert!(
+        captured.contains("serve stopped ticks="),
+        "missing stop line after SIGTERM: {captured}"
+    );
+}
+
 /// Start the binary with a configured companion that already holds a Running
 /// go_to, connect a real TCP client, and require CompanionStates whose
 /// position changes (Owen: companion actually moves + state reaches client).

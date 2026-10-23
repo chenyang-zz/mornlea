@@ -9,7 +9,7 @@
 //! shutdown releases the world lock exactly once.
 
 use mornlea_server::core::contracts::{LoadedValue, SaveKey, ServerError};
-use mornlea_server::runtime::serve::{ServeOptions, run as run_serve};
+use mornlea_server::runtime::serve::{arm_stop_on_unix_signal, run as run_serve, ServeOptions};
 use mornlea_server::store::atomic_file::AtomicFiles;
 use mornlea_server::store::lease::WorldLease;
 use std::fs;
@@ -71,7 +71,7 @@ struct Args {
 
 fn usage_error(message: &str) -> ! {
     eprintln!(
-        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> --max-ticks <n> [--config <path>]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
+        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> [--max-ticks <n>] [--config <path>]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
     );
     eprintln!("error: {message}");
     std::process::exit(USAGE_EXIT);
@@ -604,9 +604,10 @@ fn serve_main(argv: &[String]) {
     }
     let world = world.unwrap_or_else(|| usage_error("missing --world"));
     let listen = listen.unwrap_or_else(|| usage_error("missing --listen"));
-    let max_ticks = max_ticks.unwrap_or_else(|| usage_error("missing --max-ticks"));
+    // `--max-ticks` is optional: omit for production (run until SIGINT/SIGTERM).
     let _ = fs::create_dir_all(&world);
     let stop = Arc::new(AtomicBool::new(false));
+    arm_stop_on_unix_signal(Arc::clone(&stop));
     match run_serve(
         ServeOptions {
             world,
