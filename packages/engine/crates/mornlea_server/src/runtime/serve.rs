@@ -2,8 +2,9 @@
 //!
 //! The binary only parses flags and calls [`run`]. Tick pacing lives here via
 //! [`super::host_tick`]. Configuration-file consumption beyond load/defaults
-//! and fluid rescan stay in later PRs. Trusted observer is enabled here; host Attach endpoint and
-//! dialogue-memory lanes stay stacked follow-ups (Owen).
+//! and fluid rescan stay in later PRs. Trusted observer is enabled here; when
+//! [`ServeOptions::attach_trusted_observer_on_accept`] is set, the first TCP
+//! accept attaches through [`TrustedObserverHost`] (Go AttachTrustedObserver).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -34,6 +35,7 @@ use crate::runtime::companion::{
 };
 use crate::runtime::companion_planning::CompanionPlanningPorts;
 use crate::runtime::host_tick::{HostClock, HostTickScheduler, WallClock};
+use crate::runtime::trusted_observer::{ObserverEndpoint, TrustedObserverHost};
 use crate::runtime::shutdown::{
     outcome_from_step, run_shutdown, RuntimeShutdownPorts, TickOutcome,
 };
@@ -84,6 +86,10 @@ pub struct ServeOptions {
     /// [`arm_stop_on_unix_signal`] / the `stop` flag (production control-plane).
     pub max_ticks: Option<u64>,
     pub config: Option<PathBuf>,
+    /// When true, the first TCP accept attaches as the trusted observer via
+    /// [`TrustedObserverHost`] (Go `AttachTrustedObserver` after accept) instead
+    /// of entering the player login path. Process smoke and operator opt-in.
+    pub attach_trusted_observer_on_accept: bool,
 }
 
 /// Typed failure from gameplay host assembly or the paced loop.
@@ -234,11 +240,16 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
         )
         .map_err(ServeError::Authority)?;
     // Executable adoption of the trusted-observer library (Owen): serve
-    // enables the flag; host Attach/center/close is runtime::trusted_observer
-    // (callers attach an ObserverEndpoint when they have a peer).
+    // enables the flag and owns TrustedObserverHost. TCP accept attaches when
+    // ServeOptions::attach_trusted_observer_on_accept is set (process smoke).
     authority
         .set_trusted_observer_enabled(true)
         .map_err(ServeError::Authority)?;
+    let mut observer_host = TrustedObserverHost::new();
+    let observer_close_flag = Arc::new(AtomicBool::new(false));
+    let mut observer_connection: Option<ConnectionId> = None;
+    let mut observer_center_logged = false;
+    let mut observer_was_attached = false;
 
     let clock = SystemClock;
     let clock_arc: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
@@ -277,6 +288,7 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
 
     let ticks = Arc::new(AtomicU64::new(0));
     let tick_cap = options.max_ticks;
+    let attach_trusted_observer_on_accept = options.attach_trusted_observer_on_accept;
     println!(
         "mornlea-server serve ready world={} listen={}",
         options.world.display(),
@@ -312,7 +324,42 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
             if let Ok(Some(id)) =
                 transport.accept_one(&mut login.bind(&mut authority, &mut scheduler), &clock)
             {
-                connections.push(id);
+                if attach_trusted_observer_on_accept && !observer_host.is_attached() {
+                    let endpoint = Box::new(TcpAcceptObserverEndpoint {
+                        closed: Arc::clone(&observer_close_flag),
+                    });
+                    match observer_host.attach(&mut authority, endpoint) {
+                        Ok(_) => {
+                            let center = ChunkPos::new(0, 0);
+                            match observer_host.set_center(
+                                &mut authority,
+                                Dimension::OVERWORLD,
+                                center,
+                            ) {
+                                Ok(()) => println!(
+                                    "mornlea-server trusted-observer attached center=0,0"
+                                ),
+                                Err(error) => println!(
+                                    "mornlea-server trusted-observer attached set_center_err={error:?}"
+                                ),
+                            }
+                            observer_connection = Some(id);
+                            observer_was_attached = true;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "mornlea-server trusted-observer attach refused: {error:?}"
+                            );
+                            transport.close(
+                                id,
+                                crate::contracts::CloseReason::Shutdown,
+                                &mut login.bind(&mut authority, &mut scheduler),
+                            );
+                        }
+                    }
+                } else {
+                    connections.push(id);
+                }
             }
 
             // Advance logins and drain control frames before the tick so a
@@ -388,6 +435,18 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
                     }
                     connections = live;
                     ticks.fetch_add(1, Ordering::SeqCst);
+                    if observer_host.is_attached() && !observer_center_logged {
+                        if let Some((dim, pos, seq)) = observer_host.applied_center(&authority) {
+                            println!(
+                                "mornlea-server trusted-observer center applied dim={} chunk={},{} seq={}",
+                                dim.get(),
+                                pos.x(),
+                                pos.z(),
+                                seq
+                            );
+                            observer_center_logged = true;
+                        }
+                    }
                 }
                 TickOutcome::BeginShutdown(trigger) => {
                     eprintln!("FAIL tick {:?}", trigger.error());
@@ -407,10 +466,38 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
             &mut login.bind(&mut authority, &mut scheduler),
         );
     }
+    if let Some(id) = observer_connection.take() {
+        transport.close(
+            id,
+            crate::contracts::CloseReason::Shutdown,
+            &mut login.bind(&mut authority, &mut scheduler),
+        );
+    }
+    let _ = observer_host.close(&mut authority);
+    if observer_was_attached {
+        println!("mornlea-server trusted-observer closed");
+    }
+    let _ = observer_close_flag;
     finish_shutdown(&mut authority, &mut companions, scheduler, &clock)?;
     let _ = login;
     let _ = transport;
     Ok(executed)
+}
+
+
+/// ObserverEndpoint for a TCP accept that became the trusted observer.
+///
+/// Close only signals the flag; serve drops the socket on host close / shutdown
+/// (Go closes the play endpoint after detach).
+struct TcpAcceptObserverEndpoint {
+    closed: Arc<AtomicBool>,
+}
+
+impl ObserverEndpoint for TcpAcceptObserverEndpoint {
+    fn close(&mut self) -> Result<(), ServerError> {
+        self.closed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 fn warm_spawn_chunk(

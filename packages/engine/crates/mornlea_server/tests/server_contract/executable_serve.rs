@@ -661,6 +661,148 @@ fn seed_companion_running_goto(world: &PathBuf) {
     disk.close().unwrap();
 }
 
+/// Live serve TCP accept → TrustedObserverHost attach / set_center / close
+/// (Owen MUST / Miles Approve).
+#[test]
+fn serve_trusted_observer_attach_center_close_on_tcp_accept() {
+    let bin = env!("CARGO_BIN_EXE_mornlea-server");
+    let root = tempfile_world("trusted-observer");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let listen = format!("127.0.0.1:{port}");
+    let mut child = Command::new(bin)
+        .args([
+            "--serve",
+            "--world",
+            root.to_str().unwrap(),
+            "--listen",
+            &listen,
+            "--trusted-observer",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mornlea-server --serve --trusted-observer");
+
+    let stdout_pipe = child.stdout.take().expect("stdout pipe");
+    let ready_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let attached_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let applied_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ready_bg = std::sync::Arc::clone(&ready_flag);
+    let attached_bg = std::sync::Arc::clone(&attached_flag);
+    let applied_bg = std::sync::Arc::clone(&applied_flag);
+    let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stdout_buf_bg = std::sync::Arc::clone(&stdout_buf);
+    std::thread::spawn(move || {
+        let mut reader = stdout_pipe;
+        let mut chunk = [0u8; 512];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&chunk[..n]);
+                    let mut guard = stdout_buf_bg.lock().unwrap();
+                    guard.push_str(&text);
+                    if guard.contains("serve ready") {
+                        ready_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if guard.contains("trusted-observer attached") {
+                        attached_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if guard.contains("trusted-observer center applied") {
+                        applied_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let ready_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if Instant::now() > ready_deadline {
+            let _ = child.kill();
+            panic!(
+                "server never printed serve ready; stdout={}",
+                stdout_buf.lock().unwrap()
+            );
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!(
+                "server exited before ready: {status}; stdout={}",
+                stdout_buf.lock().unwrap()
+            );
+        }
+        if ready_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // TCP accept triggers TrustedObserverHost::attach + set_center.
+    let _peer = TcpStream::connect(&listen).expect("connect for trusted observer accept");
+
+    let attach_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if attached_flag.load(std::sync::atomic::Ordering::SeqCst)
+            && applied_flag.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            break;
+        }
+        if Instant::now() > attach_deadline {
+            let _ = child.kill();
+            panic!(
+                "attach/center applied not observed; stdout={}",
+                stdout_buf.lock().unwrap()
+            );
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!(
+                "server exited before attach/center: {status}; stdout={}",
+                stdout_buf.lock().unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let pid = child.id().to_string();
+    let kill_status = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .expect("spawn kill -TERM");
+    assert!(kill_status.success(), "kill -TERM failed: {kill_status}");
+
+    let exit_deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > exit_deadline {
+            let _ = child.kill();
+            panic!(
+                "server did not exit after SIGTERM; stdout={}",
+                stdout_buf.lock().unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "expected clean exit after SIGTERM, got {status}; stdout={}",
+        stdout_buf.lock().unwrap()
+    );
+    let captured = stdout_buf.lock().unwrap().clone();
+    assert!(
+        captured.contains("trusted-observer closed"),
+        "missing trusted-observer closed: {captured}"
+    );
+    assert!(
+        captured.contains("serve stopped ticks="),
+        "missing stop line: {captured}"
+    );
+}
+
 fn dead_endpoint() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

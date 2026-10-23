@@ -20,9 +20,9 @@ use crate::agent::host::{
 };
 use crate::agent::memory::CommitReservation;
 use crate::contracts::{
-    AgentHandle, AgentRequest, AgentRequestId, BaseIdentity, ClientInstanceId, Clock, CommitRequest,
-    DialogueEnvironment, DialogueFact, LeaseId, LeasedIdentity, NamespaceId, RunId, ServerError,
-    SnapshotPort,
+    ActorKey, ActorLifecycle, AgentHandle, AgentRequest, AgentRequestId, BaseIdentity,
+    ClientInstanceId, Clock, CommitRequest, DialogueEnvironment, DialogueFact, LeaseId,
+    LeasedIdentity, NamespaceId, RunId, ServerError, SnapshotPort,
 };
 use crate::core::companion_chat::{CompanionChatIssuer, CompanionChatPhase};
 use crate::core::companion_runner::TaskTimeoutMinutes;
@@ -117,6 +117,55 @@ pub struct CompanionPlanLoop {
     memory_reservations: BTreeMap<CompanionId, CommitReservation>,
     /// In-flight memory Commit request ids.
     memory_commits: BTreeMap<CompanionId, AgentRequestId>,
+}
+
+
+/// Go `pathfind.PathWindowHorizontalRadius` — idle audience uses the same
+/// horizontal radius as the path window (16 blocks, XZ only).
+const IDLE_DIALOGUE_DISTANCE_RADIUS: f32 = 16.0;
+
+/// Go `withinIdleDialogueDistance`: dx²+dz² ≤ radius² (radius = path window).
+fn within_idle_dialogue_distance(from: [f32; 3], to: [f32; 3]) -> bool {
+    let dx = from[0] - to[0];
+    let dz = from[2] - to[2];
+    dx * dx + dz * dz
+        <= IDLE_DIALOGUE_DISTANCE_RADIUS * IDLE_DIALOGUE_DISTANCE_RADIUS
+}
+
+/// Go `idleDialogueAudience`: follow target online (by player id) and within
+/// path-window horizontal distance of the companion body. Restored-only skips
+/// stay with Go's `issuer.restored` when that bit is plumbed onto last_issuers;
+/// fixtures capture live issuers with `session: None`, so session absence alone
+/// is not the restored gate.
+fn idle_dialogue_audience(
+    state: &AuthorityState,
+    issuer: &CompanionChatIssuer,
+    companion: mornlea_domain::CompanionId,
+) -> bool {
+    let actors = state.resident_actors();
+    let Some(body) = actors.iter().find(|actor| {
+        actor.key == ActorKey::Companion(companion)
+            && actor.lifecycle == ActorLifecycle::Active
+    }) else {
+        return false;
+    };
+    let Some(player) = actors.iter().find(|actor| {
+        let ActorKey::Player(session) = actor.key else {
+            return false;
+        };
+        if actor.lifecycle != ActorLifecycle::Active {
+            return false;
+        }
+        state
+            .session(session)
+            .is_some_and(|facts| facts.player_id == issuer.player_id)
+    }) else {
+        return false;
+    };
+    within_idle_dialogue_distance(
+        body.motion.position().get(),
+        player.motion.position().get(),
+    )
 }
 
 impl CompanionPlanLoop {
@@ -541,7 +590,10 @@ impl CompanionPlanLoop {
                 }
                 crate::contracts::AgentPoll::Completed(_)
                 | crate::contracts::AgentPoll::Failed(_) => {
+                    // Drop the reservation too: a failed/mismatched poll must
+                    // not leave a stuck CommitReservation blocking the lane.
                     self.memory_commits.remove(&companion);
+                    self.memory_reservations.remove(&companion);
                     settled += 1;
                 }
             }
@@ -583,7 +635,10 @@ impl CompanionPlanLoop {
             let Some(issuer) = self.last_issuers.get(&companion).cloned() else {
                 continue;
             };
-            let _ = issuer; // audience distance deferred; issuer presence gates idle
+            // Go idleDialogueAudience: online follow target within path-window.
+            if !idle_dialogue_audience(&state, &issuer, companion) {
+                continue;
+            }
             match self.idle_due_tick.get(&companion).copied() {
                 None => {
                     // First idle opportunity: arm at the current tick (fires next drive).
@@ -1994,6 +2049,72 @@ pub(crate) mod tests {
             .filter(|d| d.fact_node == DialogueFact::Idle)
             .count();
         assert_eq!(idle, 1, "idle Dialogue must be submitted on the agent");
+    }
+
+    /// Idle audience refuses when the online issuer is outside the path-window
+    /// horizontal radius (Go withinIdleDialogueDistance).
+    #[test]
+    fn plan_loop_idle_dialogue_skips_when_issuer_out_of_range() {
+        let (mut fixture, id) = queued_fixture();
+        let issuer_id = fixture
+            .authority
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .unwrap()
+            .issuer
+            .player_id;
+        // Path window radius is 16; drift 5 cells per call — eight times → 40.
+        for _ in 0..8 {
+            crate::core::state::companion_planning::tests::drift_online_player(
+                &mut fixture.authority,
+                issuer_id,
+            );
+        }
+
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        let plan = rig.agent.plan_requests()[0].clone();
+        rig.agent.fail(
+            &plan,
+            ServerError::Agent {
+                code: crate::contracts::AgentErrorCode::AgentUnavailable,
+                status: 503,
+            },
+        );
+        let _ = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(
+            report.dialogues_dispatched, 0,
+            "out-of-range issuer must not get idle dialogue"
+        );
+        assert!(
+            rig.agent.dialogue_requests().is_empty(),
+            "no Dialogue RPC when audience is out of range"
+        );
     }
 
     /// Memory lane: a terminal dialogue reservation submits Commit and a

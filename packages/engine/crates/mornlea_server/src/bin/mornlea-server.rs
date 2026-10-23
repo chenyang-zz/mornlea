@@ -71,7 +71,7 @@ struct Args {
 
 fn usage_error(message: &str) -> ! {
     eprintln!(
-        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> [--max-ticks <n>] [--config <path>]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
+        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> [--max-ticks <n>] [--config <path>] [--trusted-observer]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
     );
     eprintln!("error: {message}");
     std::process::exit(USAGE_EXIT);
@@ -575,6 +575,7 @@ fn serve_main(argv: &[String]) {
     let mut listen: Option<SocketAddr> = None;
     let mut max_ticks: Option<u64> = None;
     let mut config: Option<PathBuf> = None;
+    let mut attach_trusted_observer_on_accept = false;
     let mut index = 1;
     while index < argv.len() {
         match argv[index].as_str() {
@@ -598,6 +599,9 @@ fn serve_main(argv: &[String]) {
             "--config" => {
                 config = Some(PathBuf::from(take_value(argv, &mut index, "--config")));
             }
+            "--trusted-observer" => {
+                attach_trusted_observer_on_accept = true;
+            }
             other => usage_error(&format!("unknown flag {other}")),
         }
         index += 1;
@@ -614,6 +618,7 @@ fn serve_main(argv: &[String]) {
             listen,
             max_ticks,
             config,
+            attach_trusted_observer_on_accept,
         },
         Arc::clone(&stop),
     ) {
