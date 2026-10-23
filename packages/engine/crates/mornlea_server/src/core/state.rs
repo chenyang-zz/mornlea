@@ -45,7 +45,8 @@ use super::companion_chat::{
 };
 use super::companion_runner::{
     CompanionPathOutcome, CompanionPathRequest, CompanionRunnerOutput, FollowObservation,
-    InteractionObservation, MiningObservation, RunnerEffect, RunnerTick, TaskRunner,
+    InteractionObservation, MiningObservation, RunnerEffect, RunnerSubmission, RunnerTick,
+    TaskRunner,
 };
 use super::container_store::ContainerState;
 use super::contracts::*;
@@ -248,6 +249,9 @@ pub struct AuthorityState {
     commands: Vec<CommandEnvelope>,
     companions: Vec<QueuedCompanion>,
     companion_arrival: BTreeMap<mornlea_domain::CompanionId, u64>,
+    /// Serial behind the provenance identities core mints for task runner
+    /// actions; it only ever increases.
+    runner_action_serial: u64,
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
     acquisition: AcquisitionState,
@@ -353,6 +357,7 @@ impl AuthorityState {
             commands,
             companions: Vec::new(),
             companion_arrival: BTreeMap::new(),
+            runner_action_serial: 0,
             interactions: Vec::new(),
             chunk_results: Vec::new(),
             acquisition: AcquisitionState::default(),
@@ -692,6 +697,78 @@ impl AuthorityState {
             envelope: candidate,
         });
         Ok(CompanionReceipt::new(self.next_tick, next))
+    }
+
+    /// Submits the actions one task runner pass emitted, in pass order.
+    ///
+    /// Core owns the envelope: the generation is the companion's running
+    /// task generation, the tick is the next executable tick, and the
+    /// provenance identities are minted from a core serial (they name the
+    /// runner, never an Agent request), so the same pass always produces
+    /// the same envelopes. Every envelope goes through the checked
+    /// constructor and [`Self::submit_companion`], the same generation
+    /// fence, duplicate check and per-companion inbox bound as any other
+    /// companion action; there is no side path into the tick. A per-action
+    /// refusal is reported and skipped, the way the Go engine inbox drops
+    /// an action it cannot take; an authority that is not Running refuses
+    /// the whole call unchanged before anything is queued.
+    pub fn submit_runner_actions(
+        &mut self,
+        actions: Vec<(CompanionId, CompanionAction)>,
+    ) -> Result<RunnerSubmission, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        let mut submission = RunnerSubmission::default();
+        for (companion, action) in actions {
+            let generation = self
+                .companion_chat
+                .current_task(companion)
+                .map_or(0, |current| current.generation);
+            let envelope = self.runner_envelope(companion, generation, action);
+            match envelope.and_then(|envelope| self.submit_companion(envelope)) {
+                Ok(_) => submission.admitted.push(companion),
+                // Defensive: the phase check above already refused a
+                // non-Running authority and nothing in this loop changes
+                // the phase, so `submit_companion` cannot report it here.
+                // Should that ever change, the whole call still refuses
+                // rather than reporting a phase refusal per action.
+                Err(error @ ServerError::InvalidState { .. }) => return Err(error),
+                Err(error) => submission.refused.push((companion, error)),
+            }
+        }
+        Ok(submission)
+    }
+
+    /// Builds one runner action envelope with core-minted provenance.
+    fn runner_envelope(
+        &mut self,
+        companion: CompanionId,
+        generation: u64,
+        action: CompanionAction,
+    ) -> Result<CompanionActionEnvelope, ServerError> {
+        // Version-4 shaped bytes: a fixed kind tag in the first byte, the
+        // version and variant bits in place, and the value in the tail.
+        fn runner_uuid(kind: u8, value: u64) -> [u8; 16] {
+            let mut bytes = [0u8; 16];
+            bytes[0] = kind;
+            bytes[6] = 0x40;
+            bytes[8..16].copy_from_slice(&value.to_be_bytes());
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            bytes
+        }
+        self.runner_action_serial = self.runner_action_serial.saturating_add(1);
+        CompanionActionEnvelope::try_new(
+            companion,
+            self.next_tick,
+            AgentRequestId::try_from_bytes(runner_uuid(0x52, self.runner_action_serial))?,
+            RunId::try_from_bytes(runner_uuid(0x72, generation))?,
+            SnapshotId::try_from_bytes(runner_uuid(0x73, generation))?,
+            generation,
+            1,
+            [0; 32],
+            action,
+        )
     }
 
     pub(crate) fn tick_failure(&self) -> Option<ServerError> {
@@ -1695,6 +1772,14 @@ impl AuthorityState {
     /// is left unchanged), and the original captured issuer and command emit
     /// a broadcast started fact. No model, deadline, or task-runner policy is
     /// invented here and the storage wire format is unchanged.
+    ///
+    /// Test fixture seam only: it installs no task runner and stamps no
+    /// deadline, so a task installed here never moves or expires. Production
+    /// installs go through [`Self::install_companion_chat_plan_with_timeout`]
+    /// with the startup-frozen timeout. It compiles only for this crate's
+    /// unit tests and for integration tests through the `test-support`
+    /// feature, never into a production build.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn install_companion_chat_plan(
         &mut self,
         id: CompanionId,
@@ -1705,18 +1790,18 @@ impl AuthorityState {
     }
 
     /// Installs a validated plan and stamps the task deadline at Running
-    /// entry from the bare frozen timeout minutes: the entry world time
+    /// entry from the timeout frozen at startup: the entry world time
     /// plus the minutes converted at 1200 ticks per minute, with a
-    /// follow-tail plan keeping the zero exemption. This is the seam the
-    /// runtime assembly drives; the runner state starts here.
+    /// follow-tail plan keeping the zero exemption. This is the only
+    /// install the runtime assembly drives; the runner state starts here.
     pub fn install_companion_chat_plan_with_timeout(
         &mut self,
         id: CompanionId,
         generation: u64,
         plan: AgentPlan,
-        timeout_minutes: u32,
+        timeout: super::companion_runner::TaskTimeoutMinutes,
     ) -> Result<bool, ServerError> {
-        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout_minutes))
+        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout.get()))
     }
 
     fn install_companion_chat_plan_inner(
@@ -1751,6 +1836,11 @@ impl AuthorityState {
             return Ok(false);
         }
         let checked = AgentPlan::try_new(plan.summary.clone(), plan.steps.clone())?;
+        // The start tick reads the settled world clock the expiry check
+        // reads, so stamping and expiry can never disagree. It is read
+        // before any reservation or commit, so a failed read leaves the
+        // task, the chat record and the lifecycle quota untouched.
+        let start_tick = self.settled_read()?.world_time();
         self.reserve_chat_lifecycle_slot()?;
         let Some(installed) = self
             .companion_chat
@@ -1758,12 +1848,6 @@ impl AuthorityState {
         else {
             return Ok(false);
         };
-        let start_tick = self
-            .residents
-            .environment
-            .as_ref()
-            .map(|environment| environment.world_time)
-            .unwrap_or(self.next_tick);
         let deadline_ticks = timeout_minutes.map(|minutes| {
             super::companion_runner::task_deadline_ticks(
                 start_tick,
@@ -19821,8 +19905,13 @@ mod companion_chat_boundary_tests {
             .expect("planning receipt");
         let world_time = a.settled_read().unwrap().world_time();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19837,6 +19926,133 @@ mod companion_chat_boundary_tests {
         assert_eq!(task.state, COMPANION_TASK_RUNNING);
         assert_eq!(task.start_tick, world_time);
         assert_eq!(task.deadline_ticks, 0, "follow-tail plan stays exempt");
+    }
+
+    /// A settled read that fails at install refuses before anything is
+    /// committed: the task stays in Planning with no runner, no runtime
+    /// task, no Started fact, and the lifecycle quota untouched.
+    #[test]
+    fn runner_install_refuses_before_commit_when_the_settled_read_fails() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let before_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        // Only the settled read fails; every earlier install check passes.
+        let failure = ServerError::Internal {
+            invariant: "settled read",
+        };
+        a.tick_failure = Some(failure);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert_eq!(
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            ),
+            Err(failure)
+        );
+        a.tick_failure = None;
+        assert_eq!(
+            a.companion_chat_queue(id).unwrap().current.unwrap().phase,
+            crate::core::companion_chat::CompanionChatPhase::Planning
+        );
+        assert!(!a.companion_runners.contains_key(&id));
+        let after_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(after_task, before_task);
+        assert!(a.take_decided_chat_facts().is_empty());
+        assert_eq!(a.companion_chat.external_lifecycle_used(), 0);
+    }
+
+    /// The Running-entry start tick reads the same settled world time the
+    /// expiry check reads, as Go stamps and expires on one world clock.
+    /// Before the first tick freezes an environment the settled clock is
+    /// the metadata world time, never the completed-tick count, so a task
+    /// installed then neither expires on its first pass nor runs long.
+    #[test]
+    fn runner_install_start_tick_reads_the_expiry_clock() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.residents.environment = None;
+        a.metadata.world_time_ticks = 50_000;
+        a.next_tick = 7;
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let expiry_clock = a.settled_read().unwrap().world_time();
+        assert_eq!(expiry_clock, 50_000);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
+        );
+        let task = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(task.start_tick, expiry_clock);
+        assert_eq!(
+            task.deadline_ticks,
+            expiry_clock + super::super::companion_runner::TICKS_PER_MINUTE
+        );
+        // The first runner pass on the same clock leaves the task running.
+        a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
+        assert!(
+            !a.take_decided_chat_facts().iter().any(|fact| matches!(
+                fact.body,
+                ChatBody::Task {
+                    state: TaskState::TimedOut,
+                    ..
+                }
+            )),
+            "no timeout on the install clock"
+        );
     }
 
     /// A go-to install stamps the real deadline, and expiry finishes
@@ -19864,8 +20080,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19954,8 +20175,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         for _ in 0..3 {
             let output = a.advance_companion_runners(Vec::new()).unwrap();
@@ -20124,8 +20350,13 @@ mod companion_chat_boundary_tests {
             .unwrap()
             .expect("planning receipt");
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         // Give the runner a stale deadline and a dangling request.
         a.companion_runners

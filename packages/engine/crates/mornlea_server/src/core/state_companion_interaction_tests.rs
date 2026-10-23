@@ -330,7 +330,12 @@ impl Harness {
         let plan = AgentPlan::try_new("执行".to_owned(), steps).unwrap();
         assert!(
             self.a
-                .install_companion_chat_plan_with_timeout(id, planning.generation, plan, minutes)
+                .install_companion_chat_plan_with_timeout(
+                    id,
+                    planning.generation,
+                    plan,
+                    crate::core::companion_runner::TaskTimeoutMinutes::try_new(minutes).unwrap(),
+                )
                 .unwrap()
         );
         self.collect_facts();
@@ -1484,4 +1489,129 @@ fn companion_failure_leaves_a_mining_player_untouched() {
         player_state(&control),
         "the companion failure changes nothing on the player"
     );
+}
+
+fn step_move() -> CompanionAction {
+    CompanionAction::Move {
+        move_x: 1,
+        move_z: 0,
+        jump: false,
+        yaw: 0.0,
+    }
+}
+
+/// Runner actions enter the tick only through the ordinary companion
+/// fence: core builds the envelope as the running generation at the next
+/// tick, the minted identities are deterministic and unique per action,
+/// and the same pass on an identical authority yields identical envelopes.
+#[test]
+fn runner_actions_enter_through_the_companion_fence_deterministically() {
+    let (id, name) = amu();
+    let build = || {
+        let mut h = Harness::new(
+            &[],
+            &[(
+                (id, name.clone()),
+                [9.5, 0.0, 8.5],
+                InventoryRecord::empty(),
+            )],
+        );
+        h.run_plan("阿木", id, vec![PlanStep::GoTo { x: 12, y: 0, z: 8 }], 5);
+        h
+    };
+    let mut first = build();
+    let mut second = build();
+    let generation = first.a.companion_chat.current_task(id).unwrap().generation;
+    let tick = first.a.next_tick();
+    for h in [&mut first, &mut second] {
+        let submission =
+            h.a.submit_runner_actions(vec![(id, step_move()), (id, step_move())])
+                .unwrap();
+        assert_eq!(submission.admitted, vec![id, id]);
+        assert!(submission.refused.is_empty());
+    }
+    let queued = first.a.drain_companions(usize::MAX);
+    assert_eq!(queued, second.a.drain_companions(usize::MAX));
+    assert_eq!(queued.len(), 2);
+    for envelope in &queued {
+        assert_eq!(envelope.companion_id, id);
+        assert_eq!(envelope.generation, generation);
+        assert_eq!(envelope.source_tick, tick);
+        assert_eq!(envelope.action, step_move());
+    }
+    assert_ne!(queued[0].request_id, queued[1].request_id);
+}
+
+/// The fence refuses per action, exactly as for any companion action: an
+/// idle companion has no running generation, a non-finite yaw fails the
+/// checked constructor, and the per-companion inbox bound holds. Refused
+/// actions queue nothing; admitted ones in the same pass still queue.
+#[test]
+fn runner_actions_share_every_companion_refusal() {
+    let (id, name) = amu();
+    let (idle, idle_name) = nova();
+    let mut h = Harness::new(
+        &[],
+        &[
+            ((id, name), [9.5, 0.0, 8.5], InventoryRecord::empty()),
+            ((idle, idle_name), [5.5, 0.0, 4.5], InventoryRecord::empty()),
+        ],
+    );
+    h.run_plan("阿木", id, vec![PlanStep::GoTo { x: 12, y: 0, z: 8 }], 5);
+    let mut actions = vec![
+        (idle, step_move()),
+        (
+            id,
+            CompanionAction::Move {
+                move_x: 1,
+                move_z: 0,
+                jump: false,
+                yaw: f32::NAN,
+            },
+        ),
+    ];
+    actions.extend(std::iter::repeat_n((id, step_move()), COMPANION_INBOX + 1));
+    let submission = h.a.submit_runner_actions(actions).unwrap();
+    assert_eq!(submission.admitted, vec![id; COMPANION_INBOX]);
+    assert_eq!(
+        submission.refused,
+        vec![
+            (
+                idle,
+                ServerError::InvalidInput {
+                    field: "companion_generation"
+                }
+            ),
+            (id, ServerError::InvalidInput { field: "yaw" }),
+            (
+                id,
+                ServerError::Capacity {
+                    resource: Resource::Commands,
+                    limit: COMPANION_INBOX,
+                    observed: COMPANION_INBOX + 1,
+                }
+            ),
+        ]
+    );
+    assert_eq!(h.a.drain_companions(usize::MAX).len(), COMPANION_INBOX);
+}
+
+/// An authority that is not Running refuses the whole call unchanged and
+/// queues nothing.
+#[test]
+fn runner_actions_refuse_whole_when_not_running() {
+    let (id, name) = amu();
+    let mut h = Harness::new(
+        &[],
+        &[((id, name), [9.5, 0.0, 8.5], InventoryRecord::empty())],
+    );
+    h.run_plan("阿木", id, vec![PlanStep::GoTo { x: 12, y: 0, z: 8 }], 5);
+    assert!(h.a.begin_close());
+    assert_eq!(
+        h.a.submit_runner_actions(vec![(id, step_move())]),
+        Err(ServerError::InvalidState {
+            phase: ServerPhase::Closing
+        })
+    );
+    assert!(h.a.drain_companions(usize::MAX).is_empty());
 }

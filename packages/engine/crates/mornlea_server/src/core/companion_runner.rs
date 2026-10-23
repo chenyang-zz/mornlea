@@ -26,7 +26,7 @@
 use mornlea_domain::{BlockPos, CompanionId, TaskFailure, TaskState};
 use mornlea_engine::native::contracts::pathfind::PathGrid;
 
-use super::contracts::{CompanionAction, PlanBlock, PlanStep};
+use super::contracts::{CompanionAction, PlanBlock, PlanStep, ServerError};
 
 /// World ticks in one minute at the fixed 20 ticks per second rate.
 pub const TICKS_PER_MINUTE: u64 = 1200;
@@ -42,6 +42,41 @@ pub const FOLLOW_DISTANCE_BLOCKS: f32 = 4.0;
 pub const FOLLOW_REPLAN_DRIFT_BLOCKS: f32 = 2.0;
 /// Horizontal arrival radius around a waypoint centre, in blocks.
 pub const WAYPOINT_ARRIVAL_RADIUS: f32 = 0.35;
+
+/// Smallest accepted task timeout, in minutes (Go `ValidateTaskTimeoutMinutes`).
+pub const MIN_TIMEOUT_MINUTES: u32 = 1;
+/// Largest accepted task timeout, in minutes (Go `ValidateTaskTimeoutMinutes`).
+pub const MAX_TIMEOUT_MINUTES: u32 = 60;
+
+/// A task run timeout frozen at startup, in minutes.
+///
+/// Only values in `1..=60` construct, the range the Go config loader
+/// accepts, so a production install can never carry the unset or an
+/// out-of-range value. The value is plain data: once a holder is built
+/// from it there is no way to change it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskTimeoutMinutes(u32);
+
+impl TaskTimeoutMinutes {
+    /// The Go default used when the config key is absent.
+    pub const DEFAULT: Self = Self(DEFAULT_TIMEOUT_MINUTES);
+
+    /// Accepts exactly `1..=60` minutes.
+    pub fn try_new(minutes: u32) -> Result<Self, ServerError> {
+        if (MIN_TIMEOUT_MINUTES..=MAX_TIMEOUT_MINUTES).contains(&minutes) {
+            Ok(Self(minutes))
+        } else {
+            Err(ServerError::InvalidInput {
+                field: "task_timeout_minutes",
+            })
+        }
+    }
+
+    /// The minutes value.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
 
 /// Deadline for a task entering Running: the entry world time plus the
 /// timeout converted to ticks. A follow-tail plan keeps zero, which the
@@ -62,6 +97,15 @@ pub fn task_deadline_ticks(world_time: u64, timeout_minutes: u32, follow_tail: b
 /// Whether a plan ends in a follow step, the only timeout-exempt shape.
 pub fn plan_follow_tail(steps: &[PlanStep]) -> bool {
     matches!(steps.last(), Some(PlanStep::Follow { .. }))
+}
+
+/// What one runner action submission did, in pass order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunnerSubmission {
+    /// Companions whose action was queued for the next tick.
+    pub admitted: Vec<CompanionId>,
+    /// Companions whose action the ordinary checks refused, with the reason.
+    pub refused: Vec<(CompanionId, ServerError)>,
 }
 
 /// A path outcome delivered at a tick boundary. Both search failures
@@ -796,6 +840,25 @@ mod tests {
     }
 
     #[test]
+    fn task_timeout_accepts_only_the_go_config_range() {
+        // Go config.go validates taskTimeoutMinutes to 1..=60 and
+        // defaults an absent key to 10.
+        for minutes in [0, MAX_TIMEOUT_MINUTES + 1, u32::MAX] {
+            assert_eq!(
+                TaskTimeoutMinutes::try_new(minutes),
+                Err(ServerError::InvalidInput {
+                    field: "task_timeout_minutes"
+                })
+            );
+        }
+        for minutes in MIN_TIMEOUT_MINUTES..=MAX_TIMEOUT_MINUTES {
+            assert_eq!(TaskTimeoutMinutes::try_new(minutes).unwrap().get(), minutes);
+        }
+        assert_eq!(TaskTimeoutMinutes::DEFAULT.get(), DEFAULT_TIMEOUT_MINUTES);
+        assert_eq!(DEFAULT_TIMEOUT_MINUTES, 10);
+    }
+
+    #[test]
     fn timeout_is_pure_tick_comparison() {
         let steps = vec![go_to(3, 64, 0)];
         let mut runner = TaskRunner::installed(1, task_deadline_ticks(100, 1, false));
@@ -807,6 +870,46 @@ mod tests {
         let mut exempt = TaskRunner::installed(1, 0);
         let never = exempt.on_tick(&steps, &tick(12, u64::MAX - 1, [0.5, 64.0, 0.5]));
         assert!(!matches!(never.as_slice(), [RunnerEffect::Finish(_)]));
+    }
+
+    /// Timing out is terminal for the runner: it reports `TimedOut` once,
+    /// then every later pass and any late path outcome for the search it
+    /// had in flight yields nothing, so the finish can never repeat or be
+    /// followed by movement.
+    #[test]
+    fn timeout_finishes_the_runner_exactly_once() {
+        let steps = vec![go_to(3, 64, 0)];
+        let deadline = task_deadline_ticks(100, 1, false);
+        let mut runner = TaskRunner::installed(1, deadline);
+        let first = runner.on_tick(&steps, &tick(10, 100, [0.5, 64.0, 0.5]));
+        assert!(
+            matches!(first.as_slice(), [RunnerEffect::RequestPath { .. }]),
+            "{first:?}"
+        );
+        let at = runner.on_tick(&steps, &tick(11, deadline, [0.5, 64.0, 0.5]));
+        assert_eq!(at, vec![RunnerEffect::Finish(TaskState::TimedOut)]);
+        assert!(runner.is_finished());
+        for later in 1..=3 {
+            let quiet = runner.on_tick(
+                &steps,
+                &tick(11 + later, deadline + later, [0.5, 64.0, 0.5]),
+            );
+            assert!(
+                quiet.is_empty(),
+                "pass {later} after the timeout: {quiet:?}"
+            );
+        }
+        let late = runner.on_path_outcome(
+            15,
+            1,
+            PathOutcome::Found {
+                waypoints: vec![BlockPos::new(0, 64, 0), BlockPos::new(3, 64, 0)],
+                revisions: Vec::new(),
+            },
+        );
+        assert!(late.is_empty(), "{late:?}");
+        let after = runner.on_tick(&steps, &tick(16, deadline + 6, [0.5, 64.0, 0.5]));
+        assert!(after.is_empty(), "{after:?}");
     }
 
     #[test]

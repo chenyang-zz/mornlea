@@ -111,7 +111,7 @@ fn start_and_acquire(name: &str, endpoint: &str, token: &str, acquires: bool) {
     .expect("configured runtime");
     assert!(state.companion_persistence_enabled());
     assert_eq!(state.residents().actors.len(), 2);
-    assert_eq!(runtime.task_timeout_minutes(), 10);
+    assert_eq!(runtime.task_timeout_minutes().get(), 10);
 
     if acquires {
         let until = Instant::now() + Duration::from_secs(15);
