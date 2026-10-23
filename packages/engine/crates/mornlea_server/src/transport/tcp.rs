@@ -172,6 +172,11 @@ impl TcpTransport {
         self.listener.local_addr()
     }
 
+    /// The play session the core has handed this connection, when Play is live.
+    pub fn active_session(&self, id: ConnectionId) -> Option<SessionKey> {
+        self.core.active_session(id)
+    }
+
     /// Accepts one pending peer and reserves its prelogin slot. Returns
     /// `None` when no peer is waiting; a refused reservation drops the peer
     /// at once and also reports `None`, since the refusal itself is the

@@ -20,8 +20,8 @@ use mornlea_storage::{HostileMobs, Metadata, PassiveMobs, METADATA_CURRENT_VERSI
 
 use crate::contracts::{
     AgentHandle, AgentPoll, AgentRequest, AgentRequestId, ChunkKey, ClientInstanceId, Clock,
-    Deadline, NamespaceId, SaveBudget, ServerError, ServerLimits, SnapshotPort, StoreHandle,
-    StoreLimits, WorkerLifecycle,
+    ConnectionId, ConnectionProgress, Deadline, NamespaceId, SaveBudget, ServerError, ServerLimits,
+    SnapshotPort, StoreHandle, StoreLimits, WorkerLifecycle,
 };
 use crate::core::acquisition::LiveChunkPhase;
 use crate::core::chunk_driver::ChunkDriver;
@@ -262,15 +262,34 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
         bytes[9..16].copy_from_slice(&mint_counter.to_be_bytes()[1..]);
         Ok(bytes)
     };
+    let mut connections: Vec<ConnectionId> = Vec::new();
 
     run_paced_loop(
         HostTickScheduler::new(WallClock),
         |_| stop_flag.load(Ordering::SeqCst) || ticks_for_stop.load(Ordering::SeqCst) >= tick_cap,
         || {
-            let _ = transport.accept_one(&mut login.bind(&mut authority, &mut scheduler), &clock);
-            // Drain a bounded amount of connection I/O each host period.
-            // Connection ids are discovered via accept; pump is best-effort.
-            let _ = &transport;
+            if let Ok(Some(id)) =
+                transport.accept_one(&mut login.bind(&mut authority, &mut scheduler), &clock)
+            {
+                connections.push(id);
+            }
+
+            // Advance logins and drain control frames before the tick so a
+            // peer that just connected can enter Play on this period.
+            let mut live = Vec::with_capacity(connections.len());
+            for id in connections.drain(..) {
+                let progress = {
+                    let mut endpoint = login.bind(&mut authority, &mut scheduler);
+                    let _ = transport.pump_in(id, &mut endpoint, &clock);
+                    transport.poll(id, &mut endpoint, &clock)
+                };
+                if matches!(progress, ConnectionProgress::Closed { .. }) {
+                    continue;
+                }
+                let _ = transport.flush_out(id, &mut login.bind(&mut authority, &mut scheduler));
+                live.push(id);
+            }
+            connections = live;
 
             let step_result = match companions.as_mut() {
                 Some(runtime) => {
@@ -308,6 +327,25 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
                     let next = authority.next_tick().saturating_sub(1);
                     let _ = scheduler.poll_tick(next, SaveBudget::default(), &mut authority);
                     scheduler.drive_workers();
+                    // Forward session outboxes onto committed TCP peers, then flush.
+                    let mut live = Vec::with_capacity(connections.len());
+                    for id in connections.drain(..) {
+                        let mut endpoint = login.bind(&mut authority, &mut scheduler);
+                        if let Some(session) = transport.active_session(id) {
+                            let _ = transport.forward_prepared_outbox(
+                                id,
+                                session,
+                                &mut endpoint,
+                                64,
+                                1 << 20,
+                            );
+                        }
+                        let (_, progress) = transport.flush_out(id, &mut endpoint);
+                        if !matches!(progress, ConnectionProgress::Closed { .. }) {
+                            live.push(id);
+                        }
+                    }
+                    connections = live;
                     ticks.fetch_add(1, Ordering::SeqCst);
                 }
                 TickOutcome::BeginShutdown(trigger) => {
@@ -320,6 +358,14 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
     );
 
     let executed = ticks.load(Ordering::SeqCst);
+    // Drop live peers before shutdown so sessions do not linger on the wire.
+    for id in connections.drain(..) {
+        transport.close(
+            id,
+            crate::contracts::CloseReason::Shutdown,
+            &mut login.bind(&mut authority, &mut scheduler),
+        );
+    }
     finish_shutdown(&mut authority, &mut companions, scheduler, &clock)?;
     let _ = login;
     let _ = transport;
