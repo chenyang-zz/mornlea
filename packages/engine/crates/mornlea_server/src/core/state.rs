@@ -1163,6 +1163,14 @@ impl AuthorityState {
         })
     }
 
+    /// Live session keys the runtime retires before the final shutdown tick.
+    ///
+    /// Order is ascending by key so teardown is deterministic. Retired
+    /// sessions are already absent from this set.
+    pub fn sessions_for_shutdown(&self) -> Vec<SessionKey> {
+        self.current_sessions.iter().copied().collect()
+    }
+
     /// Retires one session between ticks. A call while a tick holds the
     /// resident loan refuses with `InvalidState` and changes nothing: the
     /// loaned resident set would otherwise carry the retired actor back.
@@ -1211,6 +1219,15 @@ impl AuthorityState {
         self.residents.sleeping.remove(&key);
         self.release_player_resident(key, slot);
         self.source_players.entries.remove(&key);
+        // Drop every command and staged chat still owned by this session.
+        // No ack and no partial effect: later ticks must see a queue that
+        // never carried them. Matches Go `session_ingress.go:379-381`
+        // dropping a detached session's input before enqueue. This is
+        // session lifecycle, not a shutdown special case in the phase
+        // machine.
+        let raw = key.get();
+        self.commands.retain(|envelope| envelope.session() != raw);
+        self.chat_queue.retain(|staged| staged.session != key);
         Ok(())
     }
 
@@ -3839,6 +3856,11 @@ impl AuthorityState {
         Ok(())
     }
 
+    /// Second shutdown entry used only by tests. Production shutdown goes
+    /// through [`crate::core::shutdown::shutdown`] alone. Compiles for this
+    /// crate's unit tests and for integration tests through the
+    /// `test-support` feature, never into a production build.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn drive_shutdown(
         &mut self,
         deadline: Deadline,
@@ -3881,6 +3903,7 @@ impl AuthorityState {
         Ok(self.shutdown.clone())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn fail_shutdown(
         &mut self,
         mut report: ShutdownReport,
@@ -3897,6 +3920,7 @@ impl AuthorityState {
         Err(ShutdownFailure { error, report })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn run_shutdown_phase(
         &mut self,
         phase: ShutdownPhase,
@@ -4042,6 +4066,7 @@ impl AuthorityState {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn flush_family(
     io: &mut ShutdownIo<'_>,
     key: SaveKey,
@@ -4055,7 +4080,9 @@ fn flush_family(
     Ok(())
 }
 
-/// Ports used by one shutdown attempt. Reports do not own snapshots.
+/// Ports used by [`AuthorityState::drive_shutdown`]. Production builds do
+/// not compile this type; they use [`crate::core::shutdown::ShutdownPorts`].
+#[cfg(any(test, feature = "test-support"))]
 pub struct ShutdownIo<'a> {
     pub reducer: &'a mut dyn FinalReducer,
     pub store: &'a mut dyn StoreHandle,
