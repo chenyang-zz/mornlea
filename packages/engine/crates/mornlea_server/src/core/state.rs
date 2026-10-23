@@ -45,7 +45,8 @@ use super::companion_chat::{
 };
 use super::companion_runner::{
     CompanionPathOutcome, CompanionPathRequest, CompanionRunnerOutput, FollowObservation,
-    RunnerEffect, RunnerTick, TaskRunner,
+    InteractionObservation, MiningObservation, RunnerEffect, RunnerSubmission, RunnerTick,
+    TaskRunner,
 };
 use super::container_store::ContainerState;
 use super::contracts::*;
@@ -246,6 +247,9 @@ pub struct AuthorityState {
     commands: Vec<CommandEnvelope>,
     companions: Vec<QueuedCompanion>,
     companion_arrival: BTreeMap<mornlea_domain::CompanionId, u64>,
+    /// Serial behind the provenance identities core mints for task runner
+    /// actions; it only ever increases.
+    runner_action_serial: u64,
     interactions: Vec<AuthorityInteraction>,
     chunk_results: Vec<ChunkResult>,
     acquisition: AcquisitionState,
@@ -351,6 +355,7 @@ impl AuthorityState {
             commands,
             companions: Vec::new(),
             companion_arrival: BTreeMap::new(),
+            runner_action_serial: 0,
             interactions: Vec::new(),
             chunk_results: Vec::new(),
             acquisition: AcquisitionState::default(),
@@ -690,6 +695,78 @@ impl AuthorityState {
             envelope: candidate,
         });
         Ok(CompanionReceipt::new(self.next_tick, next))
+    }
+
+    /// Submits the actions one task runner pass emitted, in pass order.
+    ///
+    /// Core owns the envelope: the generation is the companion's running
+    /// task generation, the tick is the next executable tick, and the
+    /// provenance identities are minted from a core serial (they name the
+    /// runner, never an Agent request), so the same pass always produces
+    /// the same envelopes. Every envelope goes through the checked
+    /// constructor and [`Self::submit_companion`], the same generation
+    /// fence, duplicate check and per-companion inbox bound as any other
+    /// companion action; there is no side path into the tick. A per-action
+    /// refusal is reported and skipped, the way the Go engine inbox drops
+    /// an action it cannot take; an authority that is not Running refuses
+    /// the whole call unchanged before anything is queued.
+    pub fn submit_runner_actions(
+        &mut self,
+        actions: Vec<(CompanionId, CompanionAction)>,
+    ) -> Result<RunnerSubmission, ServerError> {
+        if self.phase != ServerPhase::Running {
+            return Err(ServerError::InvalidState { phase: self.phase });
+        }
+        let mut submission = RunnerSubmission::default();
+        for (companion, action) in actions {
+            let generation = self
+                .companion_chat
+                .current_task(companion)
+                .map_or(0, |current| current.generation);
+            let envelope = self.runner_envelope(companion, generation, action);
+            match envelope.and_then(|envelope| self.submit_companion(envelope)) {
+                Ok(_) => submission.admitted.push(companion),
+                // Defensive: the phase check above already refused a
+                // non-Running authority and nothing in this loop changes
+                // the phase, so `submit_companion` cannot report it here.
+                // Should that ever change, the whole call still refuses
+                // rather than reporting a phase refusal per action.
+                Err(error @ ServerError::InvalidState { .. }) => return Err(error),
+                Err(error) => submission.refused.push((companion, error)),
+            }
+        }
+        Ok(submission)
+    }
+
+    /// Builds one runner action envelope with core-minted provenance.
+    fn runner_envelope(
+        &mut self,
+        companion: CompanionId,
+        generation: u64,
+        action: CompanionAction,
+    ) -> Result<CompanionActionEnvelope, ServerError> {
+        // Version-4 shaped bytes: a fixed kind tag in the first byte, the
+        // version and variant bits in place, and the value in the tail.
+        fn runner_uuid(kind: u8, value: u64) -> [u8; 16] {
+            let mut bytes = [0u8; 16];
+            bytes[0] = kind;
+            bytes[6] = 0x40;
+            bytes[8..16].copy_from_slice(&value.to_be_bytes());
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            bytes
+        }
+        self.runner_action_serial = self.runner_action_serial.saturating_add(1);
+        CompanionActionEnvelope::try_new(
+            companion,
+            self.next_tick,
+            AgentRequestId::try_from_bytes(runner_uuid(0x52, self.runner_action_serial))?,
+            RunId::try_from_bytes(runner_uuid(0x72, generation))?,
+            SnapshotId::try_from_bytes(runner_uuid(0x73, generation))?,
+            generation,
+            1,
+            [0; 32],
+            action,
+        )
     }
 
     pub(crate) fn tick_failure(&self) -> Option<ServerError> {
@@ -1693,6 +1770,14 @@ impl AuthorityState {
     /// is left unchanged), and the original captured issuer and command emit
     /// a broadcast started fact. No model, deadline, or task-runner policy is
     /// invented here and the storage wire format is unchanged.
+    ///
+    /// Test fixture seam only: it installs no task runner and stamps no
+    /// deadline, so a task installed here never moves or expires. Production
+    /// installs go through [`Self::install_companion_chat_plan_with_timeout`]
+    /// with the startup-frozen timeout. It compiles only for this crate's
+    /// unit tests and for integration tests through the `test-support`
+    /// feature, never into a production build.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn install_companion_chat_plan(
         &mut self,
         id: CompanionId,
@@ -1703,18 +1788,18 @@ impl AuthorityState {
     }
 
     /// Installs a validated plan and stamps the task deadline at Running
-    /// entry from the bare frozen timeout minutes: the entry world time
+    /// entry from the timeout frozen at startup: the entry world time
     /// plus the minutes converted at 1200 ticks per minute, with a
-    /// follow-tail plan keeping the zero exemption. This is the seam the
-    /// runtime assembly drives; the runner state starts here.
+    /// follow-tail plan keeping the zero exemption. This is the only
+    /// install the runtime assembly drives; the runner state starts here.
     pub fn install_companion_chat_plan_with_timeout(
         &mut self,
         id: CompanionId,
         generation: u64,
         plan: AgentPlan,
-        timeout_minutes: u32,
+        timeout: super::companion_runner::TaskTimeoutMinutes,
     ) -> Result<bool, ServerError> {
-        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout_minutes))
+        self.install_companion_chat_plan_inner(id, generation, plan, Some(timeout.get()))
     }
 
     fn install_companion_chat_plan_inner(
@@ -1749,6 +1834,11 @@ impl AuthorityState {
             return Ok(false);
         }
         let checked = AgentPlan::try_new(plan.summary.clone(), plan.steps.clone())?;
+        // The start tick reads the settled world clock the expiry check
+        // reads, so stamping and expiry can never disagree. It is read
+        // before any reservation or commit, so a failed read leaves the
+        // task, the chat record and the lifecycle quota untouched.
+        let start_tick = self.settled_read()?.world_time();
         self.reserve_chat_lifecycle_slot()?;
         let Some(installed) = self
             .companion_chat
@@ -1756,12 +1846,6 @@ impl AuthorityState {
         else {
             return Ok(false);
         };
-        let start_tick = self
-            .residents
-            .environment
-            .as_ref()
-            .map(|environment| environment.world_time)
-            .unwrap_or(self.next_tick);
         let deadline_ticks = timeout_minutes.map(|minutes| {
             super::companion_runner::task_deadline_ticks(
                 start_tick,
@@ -1811,11 +1895,11 @@ impl AuthorityState {
 
     /// Advances every running companion task by one runner pass at a
     /// tick boundary: delivered path outcomes are applied first, then
-    /// expiry, then step movement, in the Go tick order. Movement
-    /// actions and path searches are returned as effects; the runtime
-    /// runs the searches and hands their outcomes back no earlier than
-    /// the next pass, so a search never moves a companion in the tick
-    /// that issued it. Terminal effects finish through the existing
+    /// expiry, then step movement or interaction, in the Go tick order.
+    /// Movement, mining and placement actions and path searches are
+    /// returned as effects; the runtime runs the searches and hands their
+    /// outcomes back no earlier than the next pass, so a search never
+    /// moves a companion in the tick that issued it. Terminal effects finish through the existing
     /// finish path, which clears only the current task slot.
     pub fn advance_companion_runners(
         &mut self,
@@ -1836,6 +1920,7 @@ impl AuthorityState {
             current_revisions: Vec<(mornlea_domain::ChunkPos, u64)>,
             grid: Option<mornlea_engine::native::contracts::pathfind::PathGrid>,
             stored: (usize, u64),
+            interaction: InteractionObservation,
         }
         let snapshots: Vec<RunnerSnapshot> = {
             let view = self.settled_read()?;
@@ -1943,6 +2028,18 @@ impl AuthorityState {
                         }
                     }
                 }
+                let interaction = match steps.get(step_index) {
+                    Some(step @ (PlanStep::Mine { .. } | PlanStep::Place { .. })) => {
+                        Self::interaction_observation(
+                            &view,
+                            id,
+                            actor.dimension,
+                            center_chunk,
+                            step,
+                        )
+                    }
+                    _ => InteractionObservation::default(),
+                };
                 let grid = if needs_grid {
                     super::companion_runner::build_path_grid(
                         &view,
@@ -1961,6 +2058,7 @@ impl AuthorityState {
                     current_revisions,
                     grid,
                     stored,
+                    interaction,
                 });
             }
             snapshots
@@ -2008,6 +2106,7 @@ impl AuthorityState {
                         position: snapshot.position,
                         follow: snapshot.follow,
                         current_revisions: snapshot.current_revisions,
+                        interaction: snapshot.interaction,
                     },
                 );
             for effect in effects {
@@ -2026,7 +2125,9 @@ impl AuthorityState {
                             }
                         }
                     },
-                    RunnerEffect::Move(action) => output.actions.push((id, action)),
+                    RunnerEffect::Move(action) | RunnerEffect::Interact(action) => {
+                        output.actions.push((id, action));
+                    }
                     RunnerEffect::StepProgress { step_index } => {
                         if let Some(runtime) =
                             self.residents.runtimes.get_mut(&ActorKey::Companion(id))
@@ -2059,11 +2160,99 @@ impl AuthorityState {
         Ok(output)
     }
 
+    /// Settled observations for a companion's current mine or place step.
+    ///
+    /// Every read is bounded: the approach goal inspects at most 36 cells
+    /// of the companion's 3x3 chunk window, and the remaining fields read
+    /// the target cell, the mining progress and the inventory once. Cells
+    /// above or below the world read as air, as the Go chunk view does;
+    /// cells in a chunk outside the window or not Ready are unreadable.
+    fn interaction_observation(
+        view: &AuthorityReadView<'_>,
+        id: CompanionId,
+        dimension: Dimension,
+        center_chunk: mornlea_domain::ChunkPos,
+        step: &PlanStep,
+    ) -> InteractionObservation {
+        let (target, place_block) = match *step {
+            PlanStep::Mine { x, y, z } => (BlockPos::new(x, y, z), None),
+            PlanStep::Place { x, y, z, block } => (
+                BlockPos::new(x, y, z),
+                Some(super::companion_runner::plan_block_id(block)),
+            ),
+            PlanStep::GoTo { .. } | PlanStep::Follow { .. } => {
+                return InteractionObservation::default();
+            }
+        };
+        let key = ActorKey::Companion(id);
+        let window_block = |cell: BlockPos| -> Option<u16> {
+            if !(-64..320).contains(&cell.y()) {
+                return Some(0);
+            }
+            let chunk =
+                mornlea_domain::ChunkPos::new(cell.x().div_euclid(16), cell.z().div_euclid(16));
+            if (chunk.x() - center_chunk.x()).abs() > 1 || (chunk.z() - center_chunk.z()).abs() > 1
+            {
+                return None;
+            }
+            view.ready_chunk_revision(ChunkKey {
+                dimension,
+                pos: chunk,
+            })?;
+            view.observation(dimension, cell)
+                .map(|observed| observed.block)
+        };
+        let approach_goal = super::companion_runner::interaction_goal(target, window_block);
+        let target_block = view
+            .observation(dimension, target)
+            .map(|observed| observed.block);
+        let mining = view
+            .mining(key)
+            .filter(|progress| progress.dimension == dimension)
+            .map(|progress| MiningObservation {
+                target: progress.target,
+                elapsed: progress.elapsed,
+                required: progress.required,
+            });
+        // Capacity is judged only on saturated progress on this target, by
+        // the same resolver the mining provider settles with: its capacity
+        // refusal is the exact condition that keeps the block in place. The
+        // saturation check also keeps the resolver off every other tick; an
+        // unbreakable block resolves to a protected-block refusal, never to
+        // a capacity one.
+        let capacity_exceeded = mining.is_some_and(|progress| {
+            progress.target == target
+                && progress.elapsed == progress.required
+                && matches!(
+                    super::mutation::resolve_companion_mine(id, target, view),
+                    Err(RuleReject::Wire(RejectReason::HotbarFull))
+                )
+        });
+        let holds_item = place_block
+            .and_then(super::mutation::block_drop)
+            .zip(view.inventory(key))
+            .is_some_and(|(item, inventory)| {
+                inventory
+                    .slots
+                    .iter()
+                    .any(|slot| slot.item == item && slot.count > 0)
+            });
+        let tunables = view.environment().map(|environment| environment.tunables);
+        InteractionObservation {
+            approach_goal,
+            target_block,
+            mining,
+            capacity_exceeded,
+            holds_item,
+            eye_height: tunables.map_or(0.0, |tunables| tunables.eye_height()),
+            reach: tunables.map_or(0.0, |tunables| tunables.interaction_reach()),
+        }
+    }
+
     /// Converts a stored running task's steps back to checked plan
     /// steps for the runner, in their original order and positions, so
     /// the stored step index keeps naming the same step for any step
-    /// mix. Mine and place steps are restored faithfully even though
-    /// their executor is separate work; unknown kinds are skipped
+    /// mix, mine and place steps included; unknown kinds are skipped
     /// rather than invented.
     fn stored_plan_steps(task: &StoredCompanionTask) -> Vec<PlanStep> {
         task.plan_steps
@@ -2270,7 +2459,7 @@ impl AuthorityState {
                     x: *x,
                     y: *y,
                     z: *z,
-                    block: Self::chat_plan_block_id(*block),
+                    block: super::companion_runner::plan_block_id(*block),
                     player_id: StoredPlayerId::from_bytes([0; 16]),
                 },
                 PlanStep::Follow { player_id } => StoredPlanStep {
@@ -2291,38 +2480,6 @@ impl AuthorityState {
             start_tick,
             deadline_ticks,
             fail_reason: 0,
-        }
-    }
-
-    /// Place-block table shared with the agent host mapping.
-    ///
-    /// Values are the frozen core block ids in declaration order, copied
-    /// read-only from the agent host's plan mapping.
-    fn chat_plan_block_id(block: PlanBlock) -> u16 {
-        match block {
-            PlanBlock::Brick => 21,
-            PlanBlock::Chest => 11,
-            PlanBlock::Clay => 24,
-            PlanBlock::Cobblestone => 13,
-            PlanBlock::Dirt => 3,
-            PlanBlock::Furnace => 9,
-            PlanBlock::Glass => 20,
-            PlanBlock::Grass => 4,
-            PlanBlock::Gravel => 16,
-            PlanBlock::IronBlock => 10,
-            PlanBlock::Leaves => 19,
-            PlanBlock::LightBlock => 12,
-            PlanBlock::MossyCobblestone => 26,
-            PlanBlock::OakLog => 17,
-            PlanBlock::OakPlanks => 18,
-            PlanBlock::RoofTile => 23,
-            PlanBlock::Sand => 15,
-            PlanBlock::SmoothStone => 14,
-            PlanBlock::SnowBlock => 25,
-            PlanBlock::Stone => 2,
-            PlanBlock::StoneBrick => 6,
-            PlanBlock::WhiteWool => 22,
-            PlanBlock::Workbench => 45,
         }
     }
 
@@ -19759,8 +19916,13 @@ mod companion_chat_boundary_tests {
             .expect("planning receipt");
         let world_time = a.settled_read().unwrap().world_time();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19775,6 +19937,133 @@ mod companion_chat_boundary_tests {
         assert_eq!(task.state, COMPANION_TASK_RUNNING);
         assert_eq!(task.start_tick, world_time);
         assert_eq!(task.deadline_ticks, 0, "follow-tail plan stays exempt");
+    }
+
+    /// A settled read that fails at install refuses before anything is
+    /// committed: the task stays in Planning with no runner, no runtime
+    /// task, no Started fact, and the lifecycle quota untouched.
+    #[test]
+    fn runner_install_refuses_before_commit_when_the_settled_read_fails() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let before_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        // Only the settled read fails; every earlier install check passes.
+        let failure = ServerError::Internal {
+            invariant: "settled read",
+        };
+        a.tick_failure = Some(failure);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert_eq!(
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            ),
+            Err(failure)
+        );
+        a.tick_failure = None;
+        assert_eq!(
+            a.companion_chat_queue(id).unwrap().current.unwrap().phase,
+            crate::core::companion_chat::CompanionChatPhase::Planning
+        );
+        assert!(!a.companion_runners.contains_key(&id));
+        let after_task = match &a.residents.runtimes[&ActorKey::Companion(id)].aux {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(after_task, before_task);
+        assert!(a.take_decided_chat_facts().is_empty());
+        assert_eq!(a.companion_chat.external_lifecycle_used(), 0);
+    }
+
+    /// The Running-entry start tick reads the same settled world time the
+    /// expiry check reads, as Go stamps and expires on one world clock.
+    /// Before the first tick freezes an environment the settled clock is
+    /// the metadata world time, never the completed-tick count, so a task
+    /// installed then neither expires on its first pass nor runs long.
+    #[test]
+    fn runner_install_start_tick_reads_the_expiry_clock() {
+        let mut a = fresh();
+        let session = logged(&mut a);
+        let (id, name) = amu();
+        a.configure_companion_chat(&[(id, name)]).unwrap();
+        a.residents.actors.push(companion_actor(id));
+        a.residents
+            .runtimes
+            .insert(ActorKey::Companion(id), companion_runtime(id));
+        a.residents.environment = None;
+        a.metadata.world_time_ticks = 50_000;
+        a.next_tick = 7;
+        a.submit(session, chat("@阿木 dig")).unwrap();
+        a.prepare_companion_chat().unwrap();
+        assert_eq!(a.take_decided_chat_facts().len(), 1);
+        a.take_companion_chat_planning(id)
+            .unwrap()
+            .expect("planning receipt");
+        let expiry_clock = a.settled_read().unwrap().world_time();
+        assert_eq!(expiry_clock, 50_000);
+        let plan = AgentPlan::try_new(
+            "去目标".to_owned(),
+            vec![PlanStep::GoTo { x: 10, y: 65, z: 8 }],
+        )
+        .unwrap();
+        assert!(
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
+        );
+        let task = match &a
+            .residents
+            .runtimes
+            .get(&ActorKey::Companion(id))
+            .expect("companion runtime")
+            .aux
+        {
+            ActorAux::Companion { task, .. } => task.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(task.start_tick, expiry_clock);
+        assert_eq!(
+            task.deadline_ticks,
+            expiry_clock + super::super::companion_runner::TICKS_PER_MINUTE
+        );
+        // The first runner pass on the same clock leaves the task running.
+        a.advance_companion_runners(Vec::new()).unwrap();
+        assert!(a.companion_chat_queue(id).unwrap().current.is_some());
+        assert!(
+            !a.take_decided_chat_facts().iter().any(|fact| matches!(
+                fact.body,
+                ChatBody::Task {
+                    state: TaskState::TimedOut,
+                    ..
+                }
+            )),
+            "no timeout on the install clock"
+        );
     }
 
     /// A go-to install stamps the real deadline, and expiry finishes
@@ -19802,8 +20091,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 1)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(1).unwrap(),
+            )
+            .unwrap()
         );
         let task = match &a
             .residents
@@ -19892,8 +20186,13 @@ mod companion_chat_boundary_tests {
         )
         .unwrap();
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, plan, 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                plan,
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         for _ in 0..3 {
             let output = a.advance_companion_runners(Vec::new()).unwrap();
@@ -19965,8 +20264,8 @@ mod companion_chat_boundary_tests {
         );
     }
 
-    /// A restored mine-only task has no executor in this slice, but its
-    /// deadline still expires it exactly at the deadline tick.
+    /// A restored mine-only task still expires exactly at the deadline
+    /// tick, before its approach starts.
     #[test]
     fn restored_mine_only_task_still_times_out() {
         let mut a = fresh();
@@ -20062,8 +20361,13 @@ mod companion_chat_boundary_tests {
             .unwrap()
             .expect("planning receipt");
         assert!(
-            a.install_companion_chat_plan_with_timeout(id, 1, follow_plan(), 10)
-                .unwrap()
+            a.install_companion_chat_plan_with_timeout(
+                id,
+                1,
+                follow_plan(),
+                crate::core::companion_runner::TaskTimeoutMinutes::try_new(10).unwrap(),
+            )
+            .unwrap()
         );
         // Give the runner a stale deadline and a dangling request.
         a.companion_runners
@@ -20081,6 +20385,7 @@ mod companion_chat_boundary_tests {
                     position: [30.5, 65.0, 8.5],
                 },
                 current_revisions: Vec::new(),
+                interaction: super::super::companion_runner::InteractionObservation::default(),
             },
         );
         assert_eq!(effects.len(), 1);
@@ -25971,3 +26276,7 @@ mod command_requeue_tests {
         assert_eq!(state.queued_command_len(), 5, "nothing accepted is dropped");
     }
 }
+
+#[cfg(test)]
+#[path = "state_companion_interaction_tests.rs"]
+mod companion_interaction_tests;

@@ -1014,6 +1014,7 @@ dependencies = [
  "mornlea_domain",
  "mornlea_engine",
  "mornlea_protocol",
+ "mornlea_server",
  "mornlea_storage",
  "serde",
  "serde_json",
