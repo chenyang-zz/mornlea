@@ -8,10 +8,11 @@
 //! runner; `companion_planning` assembles the companion plan loop over
 //! the Agent host and the task runner; `tick_loop` composes one production
 //! tick over the plan loop and the authority; `shutdown` tears sessions
-//! down and hands tick errors into the core shutdown machine. Tick
-//! pacing lands in the executable-entry PR.
+//! down and hands tick errors into the core shutdown machine. `host_tick` paces the production loop at 20 TPS.
 
 pub mod companion;
+pub mod host_tick;
+pub mod serve;
 pub mod companion_planning;
 pub mod companion_runner;
 pub mod config;
