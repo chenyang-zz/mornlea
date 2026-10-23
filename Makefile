@@ -190,6 +190,7 @@ comment-language-check:
 
 ci-preflight:
 	scripts/ci/doctor.sh preflight
+	uv sync --locked --project packages/audit
 	bash -o pipefail -c 'gofmt_output="$$(git ls-files -z -- '\''*.go'\'' | xargs -0 gofmt -l)" || exit $$?; test -z "$$gofmt_output"'
 	npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive
 	node --test scripts/agent-hooks/guard.test.mjs
