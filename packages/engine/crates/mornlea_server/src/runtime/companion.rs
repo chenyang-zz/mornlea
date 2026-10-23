@@ -34,7 +34,7 @@ use mornlea_storage::{CompanionMergeError, CompanionSave, PlayerId, StoredCompan
 use super::config::AiConfig;
 use crate::agent::http::AgentHttpWire;
 use crate::agent::lease::{ControlPhase, LeaseConfig, LeaseController};
-use crate::agent::mcp::{FrozenTools, MCP_ENDPOINT_PATH, McpService};
+use crate::agent::mcp::{FrozenTools, McpService, MCP_ENDPOINT_PATH};
 use crate::agent::snapshot::{SnapshotRegistry, SystemEntropy};
 use crate::contracts::{
     AgentHandle, ClientInstanceId, Clock, Deadline, DiskBackend, LoadedValue, NamespaceId,
@@ -212,6 +212,17 @@ impl AgentServices {
         &mut dyn crate::contracts::McpLifecycle,
     ) {
         (&mut self.lease, &mut self.mcp)
+    }
+
+    /// Splits the lease (Agent business handle) and snapshot registry for one
+    /// [`crate::runtime::companion_planning::CompanionPlanningPorts`] borrow.
+    pub fn planning_handles(
+        &mut self,
+    ) -> (
+        &mut dyn crate::contracts::AgentHandle,
+        &mut dyn crate::contracts::SnapshotPort,
+    ) {
+        (&mut self.lease, &mut self.snapshots)
     }
 }
 

@@ -1348,11 +1348,8 @@ mod tests {
     }
 
     /// `TickBudget` construction is visibility-gated (`pub(crate)` / test-support).
-    /// Text guards only pin the alternate construction paths Miles and Owen
-    /// called out: no trait impl that could mint one, no `Default` /
-    /// `Deserialize` derive, and private fields. TickStartup and the serve
-    /// host may call the constructors; a source scan of `runtime/` for
-    /// `TickBudget::` is intentionally not enforced here.
+    /// Text guards pin trait/derive/field paths; constructor call sites are
+    /// scanned by `tick_budget_constructors_stay_on_tick_startup_path`.
     /// `try_new` / `full` stay `pub(crate)` unless `test-support` is on.
     #[test]
     fn tick_budget_constructors_are_pub_crate_without_test_support() {
@@ -1407,6 +1404,91 @@ mod tests {
         for field in lines[at + 1..].iter().take_while(|line| line.trim() != "}") {
             assert!(!field.trim_start().starts_with("pub"), "{field}");
         }
+    }
+
+    /// Owen: production code outside `TickStartup` (tick_loop.rs) must not
+    /// call `TickBudget::try_new` / `TickBudget::full`. Allowlisted:
+    /// tick_loop (TickStartup), core/state harness helpers, core/step
+    /// FinalReducer/revalidation. Serve must construct only via TickStartup.
+    #[test]
+    fn tick_budget_constructors_stay_on_tick_startup_path() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allow = [
+            "core/contracts.rs", // definitions
+            "runtime/tick_loop.rs",
+            "core/state.rs", // advance_tick_full / advance_tick_commands
+            "core/step.rs",  // FinalReducer + revalidation
+        ];
+        let mut offenders = Vec::new();
+        for entry in walkdir(&src) {
+            let rel = entry.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if rel.contains("tests") || rel.ends_with("_tests.rs") {
+                continue;
+            }
+            // Skip cfg(test) modules roughly by filename conventions already.
+            if allow.iter().any(|a| rel.ends_with(a)) {
+                continue;
+            }
+            let text = fs::read_to_string(&entry).unwrap();
+            // Production slice: drop everything after a #[cfg(test)] module fence.
+            let production: String = text
+                .lines()
+                .take_while(|line| !line.contains("#[cfg(test)]"))
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if production.contains("TickBudget::try_new") || production.contains("TickBudget::full")
+            {
+                offenders.push(rel);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "TickBudget::try_new/full outside TickStartup path: {offenders:?}"
+        );
+    }
+
+    /// Owen: production code must not call `advance_tick_full` (serve uses
+    /// `ServerTick::step`). The helper may remain for out-of-crate harnesses.
+    #[test]
+    fn production_code_does_not_call_advance_tick_full() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        for entry in walkdir(&src) {
+            let rel = entry.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if rel.ends_with("core/state.rs") {
+                continue; // definition
+            }
+            if rel.contains("tests") || rel.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&entry).unwrap();
+            let production: String = text
+                .lines()
+                .take_while(|line| !line.contains("#[cfg(test)]"))
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if production.contains("advance_tick_full") {
+                offenders.push(rel);
+            }
+        }
+        // Also scan the binary.
+        let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/mornlea-server.rs");
+        let bin_text = fs::read_to_string(&bin).unwrap();
+        let bin_prod: String = bin_text
+            .lines()
+            .take_while(|line| !line.contains("#[cfg(test)]"))
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if bin_prod.contains("advance_tick_full") {
+            offenders.push("bin/mornlea-server.rs".into());
+        }
+        assert!(
+            offenders.is_empty(),
+            "production advance_tick_full calls: {offenders:?}"
+        );
     }
 
     /// Owen: no Cargo.toml outside `mornlea_server` enables `test-support`

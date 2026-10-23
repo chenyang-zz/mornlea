@@ -8,17 +8,15 @@
 //! and 20 TPS pacing live in `mornlea_server::runtime::serve`. Orderly
 //! shutdown releases the world lock exactly once.
 
-use mornlea_server::contracts::ServerLimits;
 use mornlea_server::core::contracts::{LoadedValue, SaveKey, ServerError};
-use mornlea_server::runtime::serve::run_wall_clock_loop;
-use mornlea_server::state::AuthorityState;
+use mornlea_server::runtime::serve::{ServeOptions, run as run_serve};
 use mornlea_server::store::atomic_file::AtomicFiles;
 use mornlea_server::store::lease::WorldLease;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -73,7 +71,7 @@ struct Args {
 
 fn usage_error(message: &str) -> ! {
     eprintln!(
-        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> --max-ticks <n>) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
+        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> --max-ticks <n> [--config <path>]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
     );
     eprintln!("error: {message}");
     std::process::exit(USAGE_EXIT);
@@ -571,14 +569,12 @@ mod control_reply_tests {
     }
 }
 
-/// Gameplay serve entry: parse flags, bind the listen port, optionally acquire
-/// the world lock, and run the 20 TPS host loop. Stops after `--max-ticks` or
-/// when the process is killed. Full TCP admission, companion smoke, and
-/// control-plane shutdown wiring remain follow-up slices on this branch.
+/// Gameplay serve entry: parse flags only; assembly lives in `runtime::serve`.
 fn serve_main(argv: &[String]) {
     let mut world: Option<PathBuf> = None;
     let mut listen: Option<SocketAddr> = None;
     let mut max_ticks: Option<u64> = None;
+    let mut config: Option<PathBuf> = None;
     let mut index = 1;
     while index < argv.len() {
         match argv[index].as_str() {
@@ -599,61 +595,33 @@ fn serve_main(argv: &[String]) {
                     usage_error("--max-ticks must be a non-negative integer")
                 }));
             }
+            "--config" => {
+                config = Some(PathBuf::from(take_value(argv, &mut index, "--config")));
+            }
             other => usage_error(&format!("unknown flag {other}")),
         }
         index += 1;
     }
     let world = world.unwrap_or_else(|| usage_error("missing --world"));
     let listen = listen.unwrap_or_else(|| usage_error("missing --listen"));
-    let tick_cap = max_ticks.unwrap_or_else(|| usage_error("missing --max-ticks"));
-    let _game_port: std::net::TcpListener = match std::net::TcpListener::bind(listen) {
-        Ok(listener) => listener,
-        Err(_) => fail("activation_failed", "loopback game port is not bindable"),
-    };
-    let _lease = if world.join("world.meta").is_file() {
-        Some(match WorldLease::acquire(&world) {
-            Ok(lease) => lease,
-            Err(_) => fail("activation_failed", "world lock is not acquirable"),
-        })
-    } else {
-        let _ = fs::create_dir_all(&world);
-        None
-    };
-    let mut authority = AuthorityState::try_new(
-        match ServerLimits::try_new(8, 4096, 512, 64, 64, 1_048_576) {
-            Ok(limits) => limits,
-            Err(_) => fail("activation_failed", "server limits"),
-        },
-        42,
-    )
-    .unwrap_or_else(|_| fail("activation_failed", "authority"));
+    let max_ticks = max_ticks.unwrap_or_else(|| usage_error("missing --max-ticks"));
+    let _ = fs::create_dir_all(&world);
     let stop = Arc::new(AtomicBool::new(false));
-    let ticks = Arc::new(AtomicU64::new(0));
-    println!(
-        "mornlea-server serve ready world={} listen={}",
-        world.display(),
-        listen
-    );
-    let _ = std::io::stdout().flush();
-    let stop_for_poll = Arc::clone(&stop);
-    let ticks_for_poll = Arc::clone(&ticks);
-    let ticks_for_print = Arc::clone(&ticks);
-    run_wall_clock_loop(
-        move || {
-            stop_for_poll.load(Ordering::SeqCst)
-                || ticks_for_poll.load(Ordering::SeqCst) >= tick_cap
+    match run_serve(
+        ServeOptions {
+            world,
+            listen,
+            max_ticks,
+            config,
         },
-        move || {
-            if let Err(error) = authority.advance_tick_full() {
-                eprintln!("FAIL tick {error:?}");
-                stop.store(true, Ordering::SeqCst);
-                return;
-            }
-            ticks.fetch_add(1, Ordering::SeqCst);
-        },
-    );
-    println!(
-        "mornlea-server serve stopped ticks={}",
-        ticks_for_print.load(Ordering::SeqCst)
-    );
+        Arc::clone(&stop),
+    ) {
+        Ok(ticks) => {
+            println!("mornlea-server serve stopped ticks={ticks}");
+        }
+        Err(error) => {
+            eprintln!("FAIL serve {error}");
+            std::process::exit(1);
+        }
+    }
 }
