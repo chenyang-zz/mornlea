@@ -31,14 +31,14 @@ CI_ACTIONS: dict[str, str] = {
 }
 
 REQUIRED_CI_JOBS: dict[str, dict] = {
-    "preflight": {"runner": "ubuntu-24.04", "timeout": 10, "needs": [], "setups": [CI_GO, CI_NODE]},
+    "preflight": {"runner": "ubuntu-24.04", "timeout": 10, "needs": [], "setups": [CI_GO, CI_NODE, CI_UV]},
     "frontend": {"runner": "ubuntu-24.04", "timeout": 15, "needs": [], "setups": [CI_NODE]},
     "rust-quality": {"runner": "ubuntu-24.04", "timeout": 30, "needs": [], "setups": [CI_GO, CI_PYTHON, CI_UV]},
     "native-linux": {"runner": "ubuntu-24.04", "timeout": 30, "needs": [], "setups": [CI_GO]},
     "native-macos": {"runner": "macos-15", "timeout": 30, "needs": [], "setups": [CI_GO]},
-    "linux-quality": {"runner": "ubuntu-24.04", "timeout": 20, "needs": ["native-linux"], "setups": [CI_GO]},
+    "linux-quality": {"runner": "ubuntu-24.04", "timeout": 20, "needs": ["native-linux"], "setups": [CI_GO, CI_UV]},
     "race-server": {"runner": "ubuntu-24.04", "timeout": 30, "needs": ["native-linux"], "setups": [CI_GO]},
-    "race-rest": {"runner": "ubuntu-24.04", "timeout": 30, "needs": ["native-linux"], "setups": [CI_GO]},
+    "race-rest": {"runner": "ubuntu-24.04", "timeout": 30, "needs": ["native-linux"], "setups": [CI_GO, CI_UV]},
     "race-client": {"runner": "macos-15", "timeout": 45, "needs": ["native-macos"], "setups": [CI_GO]},
     "integration-server": {"runner": "ubuntu-24.04", "timeout": 30, "needs": ["native-linux"], "setups": [CI_GO, CI_PYTHON, CI_UV]},
     "integration-client": {"runner": "macos-15", "timeout": 45, "needs": ["native-macos"], "setups": [CI_GO]},
@@ -258,7 +258,11 @@ def required_workflow_violations(source: bytes | str) -> list[str]:
         if name in ("preflight", "linux-quality", "race-rest"):
             want_runs.append("sudo apt-get update\nsudo apt-get install --yes ripgrep")
         if name == "frontend":
-            want_runs.append("corepack enable\ncd packages/engine/crates/mornlea_client/frontend\ncorepack pnpm --version")
+            want_runs.append(
+                "corepack enable\ncd packages/engine/crates/mornlea_client/frontend\n"
+                "corepack install --global \"$(node -p 'require(\"./package.json\").packageManager')\"\n"
+                "corepack pnpm --version"
+            )
         if name == "rust-quality" or name.startswith("native-"):
             want_runs.append("cd packages/engine\nrustup show active-toolchain\nrustc --version\ncargo --version")
         want_runs.append(command)

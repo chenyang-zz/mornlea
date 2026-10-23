@@ -263,6 +263,12 @@ if [[ "${target}" == "darwin-arm64" ]]; then
   main_cache="${source_dir}/native-main/${target}/${PY4GODOT_HARDENED_VERSION}"
   built_main="${main_cache}/main.dylib"
   if [[ ! -f "${built_main}" ]]; then
+    if [[ "${offline}" == "false" ]]; then
+      # build-main.py resolves Cython with --offline; warm uv's cache for this interpreter first.
+      uv run --no-project --no-config --isolated --no-python-downloads \
+        --with Cython==3.3.0 --python "${python_root}/bin/python3.14" \
+        python -B -I -c 'import Cython'
+    fi
     "${python_root}/bin/python3.14" -B -I "${fork_root}/build-main.py" \
       --source-root "${source_root}" --python-root "${python_root}" \
       --output "${built_main}" --jobs 4
