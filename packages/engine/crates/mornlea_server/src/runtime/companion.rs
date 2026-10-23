@@ -207,7 +207,10 @@ impl AgentServices {
     /// mutable borrows cannot share one `AgentServices` slot.
     pub fn shutdown_handles(
         &mut self,
-    ) -> (&mut dyn crate::contracts::AgentHandle, &mut dyn crate::contracts::McpLifecycle) {
+    ) -> (
+        &mut dyn crate::contracts::AgentHandle,
+        &mut dyn crate::contracts::McpLifecycle,
+    ) {
         (&mut self.lease, &mut self.mcp)
     }
 }
@@ -216,7 +219,10 @@ impl AgentServices {
 /// release first; a failed release keeps the lease, Agent and MCP for retry;
 /// only a successful release proceeds to close the lease (AgentClose).
 impl AgentHandle for AgentServices {
-    fn submit(&mut self, request: crate::contracts::AgentRequest) -> Result<crate::contracts::AgentRequestId, ServerError> {
+    fn submit(
+        &mut self,
+        request: crate::contracts::AgentRequest,
+    ) -> Result<crate::contracts::AgentRequestId, ServerError> {
         self.lease.submit(request)
     }
 

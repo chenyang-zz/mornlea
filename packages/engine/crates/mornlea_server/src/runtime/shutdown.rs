@@ -165,10 +165,8 @@ mod tests {
         bytes[8] = 0x80;
         let id = PlayerId::try_from_bytes(bytes).unwrap();
         admit_login(
-            LoginStart::decode_inbound(
-                &LoginStart::new(id, name, 8).unwrap().encode().unwrap(),
-            )
-            .unwrap(),
+            LoginStart::decode_inbound(&LoginStart::new(id, name, 8).unwrap().encode().unwrap())
+                .unwrap(),
         )
         .unwrap()
     }
@@ -196,10 +194,7 @@ mod tests {
             TickOutcome::BeginShutdown(trigger) => assert_eq!(trigger.error(), failed),
             TickOutcome::Continued => panic!("error must begin shutdown"),
         }
-        assert!(matches!(
-            outcome_from_step(Ok(())),
-            TickOutcome::Continued
-        ));
+        assert!(matches!(outcome_from_step(Ok(())), TickOutcome::Continued));
     }
 
     /// A swallow that rewrote the tick error as a benign continue (the
@@ -260,9 +255,8 @@ mod tests {
         state.install(session, None).unwrap();
         state.activate(session).unwrap();
         let look = mornlea_domain::LookAngles::try_new(0.0, -1.4).unwrap();
-        let command = Command::PlaceBlock(
-            mornlea_domain::PlacementIntent::try_new(look, 0).unwrap(),
-        );
+        let command =
+            Command::PlaceBlock(mornlea_domain::PlacementIntent::try_new(look, 0).unwrap());
         state
             .accept(
                 session,

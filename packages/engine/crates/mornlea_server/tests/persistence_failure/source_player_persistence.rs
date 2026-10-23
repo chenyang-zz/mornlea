@@ -1162,11 +1162,8 @@ mod physical {
         reopened.close().unwrap();
     }
 
-
-
-
     fn place_scene_chunk() -> Chunk {
-        use mornlea_domain::{chunk_block_index, BlockPos};
+        use mornlea_domain::{BlockPos, chunk_block_index};
         use mornlea_storage::{ContainerSnapshot, StorageKind};
         const AIR: u16 = 0;
         const GRASS: u16 = 4;
@@ -1443,7 +1440,10 @@ mod physical {
         state.advance_tick(TickBudget::full()).unwrap();
         let target = BlockPos::new(8, 65, 9);
         assert_eq!(
-            state.settled_read().unwrap().block(Dimension::OVERWORLD, target),
+            state
+                .settled_read()
+                .unwrap()
+                .block(Dimension::OVERWORLD, target),
             Some(STONE),
             "ordinary tick must place stone at {target:?}"
         );
