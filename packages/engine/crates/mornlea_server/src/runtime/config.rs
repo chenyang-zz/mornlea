@@ -1347,47 +1347,41 @@ mod tests {
         ));
     }
 
-    /// Fluid budgets stay raw numbers here; the fluid host owns constructing
-    /// `TickBudget`. The tick assembly only carries the budget it is handed.
-    ///
-    /// Runtime code may name the type but never reach a constructor: no
-    /// associated path, no renaming import or cast, and no type alias that
-    /// could reach one under another name. The type itself offers no other
-    /// way in, which the second half pins: private fields, and no `Default`,
-    /// `From` or `Deserialize` (no trait impl at all), so neither
-    /// `Default::default()` nor a conversion can produce one.
+    /// `TickBudget` construction is visibility-gated (`pub(crate)` / test-support).
+    /// Text guards only pin the alternate construction paths Miles and Owen
+    /// called out: no trait impl that could mint one, no `Default` /
+    /// `Deserialize` derive, and private fields. TickStartup and the serve
+    /// host may call the constructors; a source scan of `runtime/` for
+    /// `TickBudget::` is intentionally not enforced here.
+    /// `try_new` / `full` stay `pub(crate)` unless `test-support` is on.
     #[test]
-    fn runtime_never_constructs_tick_budget() {
-        // Split so this test's own source does not match.
-        let name = ["Tick", "Budget"].concat();
-        let associated = format!("{name}::");
-        let renamed = format!("{name} as ");
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
-        for entry in walkdir(&root) {
-            let code = code_tokens(&fs::read_to_string(&entry).unwrap());
-            let file = entry.display();
-            assert!(
-                !code.contains(&associated),
-                "{file} must not construct the fluid tick budget"
-            );
-            assert!(
-                !code.contains(&renamed),
-                "{file} must not rename the fluid tick budget"
-            );
-            for statement in code.split([';', '{', '}']) {
-                let Some(alias) = word_start(statement, "type ") else {
-                    continue;
-                };
-                let rest = &statement[alias..];
-                if let Some(eq) = rest.find('=') {
-                    assert!(
-                        !rest[eq..].contains(&name),
-                        "{file} must not alias the fluid tick budget"
-                    );
-                }
-            }
-        }
+    fn tick_budget_constructors_are_pub_crate_without_test_support() {
+        let contracts = fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/contracts.rs"),
+        )
+        .unwrap();
+        let tokens = code_tokens(&contracts);
+        assert!(
+            tokens.contains(r#"#[cfg(not(feature = "test-support"))] pub(crate) fn try_new("#),
+            "try_new must be pub(crate) without test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(not(feature = "test-support"))] pub(crate) fn full()"#),
+            "full must be pub(crate) without test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(feature = "test-support")] pub fn try_new("#),
+            "try_new must be pub under test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(feature = "test-support")] pub fn full()"#),
+            "full must be pub under test-support"
+        );
+    }
 
+    #[test]
+    fn tick_budget_forbids_trait_impl_and_public_fields() {
+        let name = ["Tick", "Budget"].concat();
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
         let trait_impl = format!("for {name}");
         for entry in walkdir(&src) {
@@ -1415,6 +1409,49 @@ mod tests {
         }
     }
 
+    /// Owen: no Cargo.toml outside `mornlea_server` enables `test-support`
+    /// (Godot facade, cmd, and every other workspace crate stay clean).
+    #[test]
+    fn test_support_feature_stays_inside_mornlea_server_cargo_toml() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // packages/engine/crates/mornlea_server -> packages/
+        let packages = manifest_dir
+            .ancestors()
+            .nth(3)
+            .expect("packages/")
+            .to_path_buf();
+        assert!(packages.ends_with("packages"), "{packages:?}");
+        let server_cargo = manifest_dir.join("Cargo.toml");
+        let mut offenders = Vec::new();
+        let mut stack = vec![packages];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.file_name().and_then(|n| n.to_str()) != Some("Cargo.toml") {
+                    continue;
+                }
+                if path == server_cargo {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                if text.contains("test-support") {
+                    offenders.push(path);
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "Cargo.toml outside mornlea_server must not enable test-support: {offenders:?}"
+        );
+    }
+
     /// Source text without line comments, whitespace collapsed to single
     /// spaces and none around `::`, so a line break or spacing cannot hide
     /// a path from the guards above.
@@ -1429,16 +1466,6 @@ mod tests {
             .join(" ")
             .replace(" ::", "::")
             .replace(":: ", "::")
-    }
-
-    /// Byte offset of `word` where it starts a token.
-    fn word_start(text: &str, word: &str) -> Option<usize> {
-        text.match_indices(word).map(|(at, _)| at).find(|&at| {
-            text[..at]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
-        })
     }
 
     fn walkdir(root: &Path) -> Vec<PathBuf> {

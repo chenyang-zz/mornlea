@@ -784,6 +784,20 @@ impl AuthorityState {
         retained
     }
 
+    /// One tick at full ceilings. Out-of-crate harnesses use this instead of
+    /// constructing [`TickBudget`] (constructors are crate-private).
+    pub fn advance_tick_full(&mut self) -> Result<TickPublication, ServerError> {
+        self.advance_tick(TickBudget::full())
+    }
+
+    /// One tick with a checked command ceiling and zero fluid/farmland work.
+    pub fn advance_tick_commands(
+        &mut self,
+        commands: usize,
+    ) -> Result<TickPublication, ServerError> {
+        self.advance_tick(TickBudget::try_new(commands, 0, 0, 0, 0)?)
+    }
+
     pub fn advance_tick(&mut self, work: TickBudget) -> Result<TickPublication, ServerError> {
         if let Some(error) = self.tick_failure {
             return Err(error);
@@ -5523,6 +5537,11 @@ impl<'a> TickContext<'a> {
         Self::from_parts(authority, budget)
     }
 
+    /// Out-of-crate harness entry that does not need `TickBudget` constructors.
+    pub fn harness_full(authority: &'a mut AuthorityState) -> Self {
+        Self::harness(authority, TickBudget::full())
+    }
+
     /// Between-tick staging context seeded from the committed residents,
     /// mirroring the production tick's seeding so fixtures staged between two
     /// ticks preserve every resident lane. The caller commits through
@@ -5530,6 +5549,11 @@ impl<'a> TickContext<'a> {
     /// staging path; dropping the context restores the untouched residents.
     pub fn restage(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
         Self::for_tick(authority, budget)
+    }
+
+    /// Out-of-crate harness entry that does not need `TickBudget` constructors.
+    pub fn restage_full(authority: &'a mut AuthorityState) -> Self {
+        Self::restage(authority, TickBudget::full())
     }
 
     /// Production tick context. The serial reducer owns the only call; the
