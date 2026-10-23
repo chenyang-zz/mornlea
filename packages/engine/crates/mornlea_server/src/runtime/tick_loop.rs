@@ -46,10 +46,42 @@ impl TickStartup {
         }
     }
 
+    /// Full-ceiling budget owned by the tick-startup module (Owen: TickStartup
+    /// may construct `TickBudget`).
+    pub fn with_full_budget(task_timeout: TaskTimeoutMinutes) -> Self {
+        Self::new(task_timeout, TickBudget::full())
+    }
+
+    /// Checked budget from raw host numbers (serve / fluid host path).
+    pub fn try_with_budget(
+        task_timeout: TaskTimeoutMinutes,
+        commands: usize,
+        fluid_updates_per_dimension: usize,
+        fluid_rescan_target_per_dimension: usize,
+        farmland_checks: usize,
+        farmland_block_reads: usize,
+    ) -> Result<Self, ServerError> {
+        Ok(Self::new(
+            task_timeout,
+            TickBudget::try_new(
+                commands,
+                fluid_updates_per_dimension,
+                fluid_rescan_target_per_dimension,
+                farmland_checks,
+                farmland_block_reads,
+            )?,
+        ))
+    }
+
     /// Startup values for a started companion runtime: its frozen task
     /// timeout is read exactly once, here.
     pub fn for_companions(runtime: &CompanionRuntime, budget: TickBudget) -> Self {
         Self::new(runtime.task_timeout_minutes(), budget)
+    }
+
+    /// Companion timeout plus a full-ceiling budget.
+    pub fn for_companions_full(runtime: &CompanionRuntime) -> Self {
+        Self::with_full_budget(runtime.task_timeout_minutes())
     }
 
     /// The frozen companion task timeout.

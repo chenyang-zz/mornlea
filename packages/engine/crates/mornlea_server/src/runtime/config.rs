@@ -1347,47 +1347,38 @@ mod tests {
         ));
     }
 
-    /// Fluid budgets stay raw numbers here; the fluid host owns constructing
-    /// `TickBudget`. The tick assembly only carries the budget it is handed.
-    ///
-    /// Runtime code may name the type but never reach a constructor: no
-    /// associated path, no renaming import or cast, and no type alias that
-    /// could reach one under another name. The type itself offers no other
-    /// way in, which the second half pins: private fields, and no `Default`,
-    /// `From` or `Deserialize` (no trait impl at all), so neither
-    /// `Default::default()` nor a conversion can produce one.
+    /// `TickBudget` construction is visibility-gated (`pub(crate)` / test-support).
+    /// Text guards pin trait/derive/field paths; constructor call sites are
+    /// scanned by `tick_budget_constructors_stay_on_tick_startup_path`.
+    /// `try_new` / `full` stay `pub(crate)` unless `test-support` is on.
     #[test]
-    fn runtime_never_constructs_tick_budget() {
-        // Split so this test's own source does not match.
-        let name = ["Tick", "Budget"].concat();
-        let associated = format!("{name}::");
-        let renamed = format!("{name} as ");
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/runtime");
-        for entry in walkdir(&root) {
-            let code = code_tokens(&fs::read_to_string(&entry).unwrap());
-            let file = entry.display();
-            assert!(
-                !code.contains(&associated),
-                "{file} must not construct the fluid tick budget"
-            );
-            assert!(
-                !code.contains(&renamed),
-                "{file} must not rename the fluid tick budget"
-            );
-            for statement in code.split([';', '{', '}']) {
-                let Some(alias) = word_start(statement, "type ") else {
-                    continue;
-                };
-                let rest = &statement[alias..];
-                if let Some(eq) = rest.find('=') {
-                    assert!(
-                        !rest[eq..].contains(&name),
-                        "{file} must not alias the fluid tick budget"
-                    );
-                }
-            }
-        }
+    fn tick_budget_constructors_are_pub_crate_without_test_support() {
+        let contracts = fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/contracts.rs"),
+        )
+        .unwrap();
+        let tokens = code_tokens(&contracts);
+        assert!(
+            tokens.contains(r#"#[cfg(not(feature = "test-support"))] pub(crate) fn try_new("#),
+            "try_new must be pub(crate) without test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(not(feature = "test-support"))] pub(crate) fn full()"#),
+            "full must be pub(crate) without test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(feature = "test-support")] pub fn try_new("#),
+            "try_new must be pub under test-support"
+        );
+        assert!(
+            tokens.contains(r#"#[cfg(feature = "test-support")] pub fn full()"#),
+            "full must be pub under test-support"
+        );
+    }
 
+    #[test]
+    fn tick_budget_forbids_trait_impl_and_public_fields() {
+        let name = ["Tick", "Budget"].concat();
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
         let trait_impl = format!("for {name}");
         for entry in walkdir(&src) {
@@ -1415,6 +1406,211 @@ mod tests {
         }
     }
 
+    /// Owen: production code outside `TickStartup` (tick_loop.rs) must not
+    /// call `TickBudget::try_new` / `TickBudget::full`. Allowlisted:
+    /// tick_loop (TickStartup), core/state harness helpers, core/step
+    /// FinalReducer/revalidation. Serve must construct only via TickStartup.
+    #[test]
+    fn tick_budget_constructors_stay_on_tick_startup_path() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allow = [
+            "core/contracts.rs", // definitions
+            "runtime/tick_loop.rs",
+            "core/state.rs", // advance_tick_full / advance_tick_commands
+            "core/step.rs",  // FinalReducer + revalidation
+        ];
+        let mut offenders = Vec::new();
+        for entry in walkdir(&src) {
+            let rel = entry.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if rel.contains("tests") || rel.ends_with("_tests.rs") {
+                continue;
+            }
+            // Skip cfg(test) modules roughly by filename conventions already.
+            if allow.iter().any(|a| rel.ends_with(a)) {
+                continue;
+            }
+            let text = fs::read_to_string(&entry).unwrap();
+            let production = production_source(&text);
+            if production.contains("TickBudget::try_new") || production.contains("TickBudget::full")
+            {
+                offenders.push(rel);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "TickBudget::try_new/full outside TickStartup path: {offenders:?}"
+        );
+    }
+
+    /// Owen: production code must not call `advance_tick_full` (serve uses
+    /// `ServerTick::step`). The helper may remain for out-of-crate harnesses.
+    #[test]
+    fn production_code_does_not_call_advance_tick_full() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        for entry in walkdir(&src) {
+            let rel = entry.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if rel.ends_with("core/state.rs") {
+                continue; // definition
+            }
+            if rel.contains("tests") || rel.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&entry).unwrap();
+            let production = production_source(&text);
+            if production.contains("advance_tick_full") {
+                offenders.push(rel);
+            }
+        }
+        // Also scan the binary.
+        let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/mornlea-server.rs");
+        let bin_text = fs::read_to_string(&bin).unwrap();
+        if production_source(&bin_text).contains("advance_tick_full") {
+            offenders.push("bin/mornlea-server.rs".into());
+        }
+        assert!(
+            offenders.is_empty(),
+            "production advance_tick_full calls: {offenders:?}"
+        );
+    }
+
+    /// Owen: no Cargo.toml outside `mornlea_server` enables `test-support`
+    /// (Godot facade, cmd, and every other workspace crate stay clean).
+    #[test]
+    fn test_support_feature_stays_inside_mornlea_server_cargo_toml() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // packages/engine/crates/mornlea_server -> packages/
+        let packages = manifest_dir
+            .ancestors()
+            .nth(3)
+            .expect("packages/")
+            .to_path_buf();
+        assert!(packages.ends_with("packages"), "{packages:?}");
+        let server_cargo = manifest_dir.join("Cargo.toml");
+        let mut offenders = Vec::new();
+        let mut stack = vec![packages];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.file_name().and_then(|n| n.to_str()) != Some("Cargo.toml") {
+                    continue;
+                }
+                if path == server_cargo {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                if text.contains("test-support") {
+                    offenders.push(path);
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "Cargo.toml outside mornlea_server must not enable test-support: {offenders:?}"
+        );
+    }
+
+
+    /// Comment-stripped production source: removes `#[cfg(test)]` items by
+    /// brace-matching (and `;` / `,` one-liners) so an early test module cannot
+    /// hide later production code from the guards (Miles: scan full production).
+    fn production_source(text: &str) -> String {
+        strip_cfg_test_items(text)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn strip_cfg_test_items(source: &str) -> String {
+        let lines: Vec<&str> = source.lines().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim_start();
+            if trimmed.starts_with("#[cfg(test)]") && trimmed != "#[cfg(test)]" {
+                i += 1;
+                continue;
+            }
+            if trimmed == "#[cfg(test)]" {
+                i = skip_cfg_test_item(&lines, i);
+                continue;
+            }
+            out.push(lines[i]);
+            i += 1;
+        }
+        out.join("\n")
+    }
+
+    fn skip_cfg_test_item(lines: &[&str], start: usize) -> usize {
+        let mut i = start + 1;
+        while i < lines.len() {
+            let t = lines[i].trim_start();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= lines.len() {
+            return i;
+        }
+        let mut depth = 0isize;
+        let mut seen_brace = false;
+        while i < lines.len() {
+            let line = lines[i];
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        seen_brace = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            i += 1;
+            let t = line.trim_end();
+            if !seen_brace && (t.ends_with(';') || t.ends_with(',')) {
+                break;
+            }
+            if seen_brace && depth <= 0 {
+                break;
+            }
+        }
+        i
+    }
+
+    #[test]
+    fn production_source_keeps_code_after_early_cfg_test_module() {
+        let sample = r#"
+fn production_one() {}
+#[cfg(test)]
+mod early_tests {
+    fn hidden() { advance_tick_full(); }
+}
+fn production_two() { TickBudget::full(); }
+#[cfg(test)]
+mod late_tests {
+    fn also_hidden() {}
+}
+"#;
+        let prod = production_source(sample);
+        assert!(prod.contains("production_one"), "{prod}");
+        assert!(prod.contains("production_two"), "{prod}");
+        assert!(prod.contains("TickBudget::full"), "{prod}");
+        assert!(!prod.contains("advance_tick_full"), "{prod}");
+        assert!(!prod.contains("early_tests"), "{prod}");
+        assert!(!prod.contains("late_tests"), "{prod}");
+    }
+
     /// Source text without line comments, whitespace collapsed to single
     /// spaces and none around `::`, so a line break or spacing cannot hide
     /// a path from the guards above.
@@ -1429,16 +1625,6 @@ mod tests {
             .join(" ")
             .replace(" ::", "::")
             .replace(":: ", "::")
-    }
-
-    /// Byte offset of `word` where it starts a token.
-    fn word_start(text: &str, word: &str) -> Option<usize> {
-        text.match_indices(word).map(|(at, _)| at).find(|&at| {
-            text[..at]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
-        })
     }
 
     fn walkdir(root: &Path) -> Vec<PathBuf> {

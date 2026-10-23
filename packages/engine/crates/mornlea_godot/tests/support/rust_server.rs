@@ -477,7 +477,7 @@ impl Server {
             .unwrap()
             .with_view_radius(2);
         let mut authority = AuthorityState::try_new(limits, WORLD_SEED).unwrap();
-        let mut context = TickContext::restage(&mut authority, TickBudget::full());
+        let mut context = TickContext::restage_full(&mut authority);
         context
             .stage(RuleEffect::Environment(day_environment(1_000)))
             .unwrap();
@@ -661,15 +661,25 @@ impl Server {
             .collect()
     }
     pub fn stage(&mut self, apply: impl FnOnce(&mut TickContext<'_>)) {
-        let mut ctx = TickContext::restage(&mut self.authority, TickBudget::full());
+        let mut ctx = TickContext::restage_full(&mut self.authority);
         apply(&mut ctx);
         let residents = ctx.resident_snapshot();
         drop(ctx);
         self.authority.commit_residents(residents);
     }
     pub fn tick(&mut self) -> TickPublication {
-        self.tick_budget(TickBudget::full())
+        self.tick_full()
     }
+    pub fn tick_full(&mut self) -> TickPublication {
+        self.authority.advance_tick_full().expect("tick")
+    }
+
+    pub fn tick_commands(&mut self, commands: usize) -> TickPublication {
+        self.authority
+            .advance_tick_commands(commands)
+            .expect("tick")
+    }
+
     pub fn tick_budget(&mut self, budget: TickBudget) -> TickPublication {
         // Only the external planner completion is immediate; task installation and publication stay authoritative.
         let companion = CompanionId::try_from_bytes(uuid(9)).unwrap();
@@ -1302,12 +1312,31 @@ mod client {
             self.tick();
         }
         pub fn tick(&mut self) -> Arc<PresentationFrame> {
-            self.tick_budget(TickBudget::full())
+            self.tick_full()
+        }
+        pub fn tick_full(&mut self) -> Arc<PresentationFrame> {
+            self.pump();
+            let wire_start = self.wire.len();
+            let publication = self.server.tick_full();
+            self.finish_tick_publication(wire_start, publication)
+        }
+        pub fn tick_commands(&mut self, commands: usize) -> Arc<PresentationFrame> {
+            self.pump();
+            let wire_start = self.wire.len();
+            let publication = self.server.tick_commands(commands);
+            self.finish_tick_publication(wire_start, publication)
         }
         pub fn tick_budget(&mut self, budget: TickBudget) -> Arc<PresentationFrame> {
             self.pump();
             let wire_start = self.wire.len();
             let publication = self.server.tick_budget(budget);
+            self.finish_tick_publication(wire_start, publication)
+        }
+        fn finish_tick_publication(
+            &mut self,
+            wire_start: usize,
+            publication: TickPublication,
+        ) -> Arc<PresentationFrame> {
             let session = self.server.session(player(1)).unwrap();
             let expected: Vec<_> = publication
                 .events

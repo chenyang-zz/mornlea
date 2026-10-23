@@ -836,7 +836,7 @@ fn correction_and_audio(tcp: bool) {
         ctx.stage(RuleEffect::Actor(actor)).unwrap();
     });
     let frame =
-        rig.tick_budget(mornlea_server::contracts::TickBudget::try_new(1, 0, 0, 0, 0).unwrap());
+        rig.tick_commands(1);
     assert_eq!(
         rig.server
             .authority

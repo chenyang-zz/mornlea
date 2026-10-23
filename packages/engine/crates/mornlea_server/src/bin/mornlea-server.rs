@@ -1,24 +1,23 @@
 #![deny(unsafe_code)]
 
-//! Opt-in Rust server binary for activation qualification.
+//! Opt-in Rust server binary: activation qualification and gameplay serve.
 //!
-//! The binary proves one claim: this exact process exclusively owns the
-//! named world and answers the local control plane. It parses the frozen
-//! activation flags, binds the loopback game port as a reservation, matches
-//! the manifest nonce and world path, acquires the OS world lock, loads the
-//! stored metadata through the real standalone reader, then serves `status`
-//! and `shutdown` on the local control socket. It runs no ticks, admits no
-//! sessions, and exposes no world action endpoint; gameplay serving stays a
-//! recorded opt-in limitation. Orderly shutdown closes the store, reports
-//! the quiescent phase, and exits so the lock releases exactly once.
+//! Activation mode (default, with `--activation-manifest`) proves exclusive
+//! world ownership and answers the local control plane without running ticks.
+//! `--serve` enters the gameplay host: the binary only parses flags; assembly
+//! and 20 TPS pacing live in `mornlea_server::runtime::serve`. Orderly
+//! shutdown releases the world lock exactly once.
 
 use mornlea_server::core::contracts::{LoadedValue, SaveKey, ServerError};
+use mornlea_server::runtime::serve::{arm_stop_on_unix_signal, run as run_serve, ServeOptions};
 use mornlea_server::store::atomic_file::AtomicFiles;
 use mornlea_server::store::lease::WorldLease;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Usage failures exit here; operational failures print one `FAIL <code>`
@@ -72,7 +71,7 @@ struct Args {
 
 fn usage_error(message: &str) -> ! {
     eprintln!(
-        "usage: mornlea-server --world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run]"
+        "usage: mornlea-server (--serve --world <path> --listen <127.0.0.1:port> [--max-ticks <n>] [--config <path>] [--trusted-observer]) | (--world <path> --listen <127.0.0.1:port> --activation-manifest <path> --control-socket <path> [--dry-run])"
     );
     eprintln!("error: {message}");
     std::process::exit(USAGE_EXIT);
@@ -267,6 +266,10 @@ fn write_control_reply(stream: &mut impl ControlSocket, deadline: Instant, mut b
 
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
+    if argv.iter().any(|a| a == "--serve") {
+        serve_main(&argv);
+        return;
+    }
     let args = parse_args(&argv);
     let mut manifest = load_manifest(&args.manifest);
     let world = check_world_binding(&args, &manifest);
@@ -563,5 +566,68 @@ mod control_reply_tests {
         write_control_reply(&mut socket, deadline, b"reply\n");
         assert_eq!(socket.writes, 1, "expired reply must not write again");
         assert_eq!(socket.flushes, 0, "expired reply must not flush");
+    }
+}
+
+/// Gameplay serve entry: parse flags only; assembly lives in `runtime::serve`.
+fn serve_main(argv: &[String]) {
+    let mut world: Option<PathBuf> = None;
+    let mut listen: Option<SocketAddr> = None;
+    let mut max_ticks: Option<u64> = None;
+    let mut config: Option<PathBuf> = None;
+    let mut attach_trusted_observer_on_accept = false;
+    let mut index = 1;
+    while index < argv.len() {
+        match argv[index].as_str() {
+            "--serve" => {}
+            "--world" => {
+                world = Some(PathBuf::from(take_value(argv, &mut index, "--world")));
+            }
+            "--listen" => {
+                let value = take_value(argv, &mut index, "--listen");
+                match value.parse::<SocketAddr>() {
+                    Ok(addr) if addr.ip().is_loopback() => listen = Some(addr),
+                    _ => usage_error("--listen must name a loopback socket address"),
+                }
+            }
+            "--max-ticks" => {
+                let value = take_value(argv, &mut index, "--max-ticks");
+                max_ticks = Some(value.parse::<u64>().unwrap_or_else(|_| {
+                    usage_error("--max-ticks must be a non-negative integer")
+                }));
+            }
+            "--config" => {
+                config = Some(PathBuf::from(take_value(argv, &mut index, "--config")));
+            }
+            "--trusted-observer" => {
+                attach_trusted_observer_on_accept = true;
+            }
+            other => usage_error(&format!("unknown flag {other}")),
+        }
+        index += 1;
+    }
+    let world = world.unwrap_or_else(|| usage_error("missing --world"));
+    let listen = listen.unwrap_or_else(|| usage_error("missing --listen"));
+    // `--max-ticks` is optional: omit for production (run until SIGINT/SIGTERM).
+    let _ = fs::create_dir_all(&world);
+    let stop = Arc::new(AtomicBool::new(false));
+    arm_stop_on_unix_signal(Arc::clone(&stop));
+    match run_serve(
+        ServeOptions {
+            world,
+            listen,
+            max_ticks,
+            config,
+            attach_trusted_observer_on_accept,
+        },
+        Arc::clone(&stop),
+    ) {
+        Ok(ticks) => {
+            println!("mornlea-server serve stopped ticks={ticks}");
+        }
+        Err(error) => {
+            eprintln!("FAIL serve {error}");
+            std::process::exit(1);
+        }
     }
 }

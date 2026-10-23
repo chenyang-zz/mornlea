@@ -154,6 +154,11 @@ impl TcpTransport {
     /// frozen source handshake limits.
     pub fn bind_loopback() -> io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        Self::from_listener(listener)
+    }
+
+    /// Takes ownership of an already-bound loopback listener (for `--listen`).
+    pub fn from_listener(listener: TcpListener) -> io::Result<Self> {
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
@@ -165,6 +170,11 @@ impl TcpTransport {
     /// The loopback address peers connect to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
+    }
+
+    /// The play session the core has handed this connection, when Play is live.
+    pub fn active_session(&self, id: ConnectionId) -> Option<SessionKey> {
+        self.core.active_session(id)
     }
 
     /// Accepts one pending peer and reserves its prelogin slot. Returns
@@ -622,8 +632,8 @@ mod prepared_tests {
     use crate::transport::live::{LiveEndpoint, LoginDriver};
     use mornlea_domain::{Dimension, Identities, PlayerId};
     use mornlea_protocol::{
-        AdmittedLogin, BlockChange, BlockChanges, ClientHello, ClientPacket, CommandRejected,
-        LoginStart, PlayIntent, ProtocolCodec, ServerPacket, encode_uvarint,
+        encode_uvarint, AdmittedLogin, BlockChange, BlockChanges, ClientHello, ClientPacket,
+        CommandRejected, LoginStart, PlayIntent, ProtocolCodec, ServerPacket,
     };
     use std::time::{Duration, Instant};
 

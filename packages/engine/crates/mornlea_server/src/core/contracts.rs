@@ -459,6 +459,15 @@ impl ServerLimits {
 }
 
 /// Zero work is legal. Ceilings are 4096 / 512 / 65536 / 65536 / 65536.
+///
+/// Constructors are crate-visible (`pub(crate)`). Outside this crate they
+/// appear only with the `test-support` feature (mornlea_server integration
+/// tests only; no other workspace `Cargo.toml` may enable it). Production
+/// assembly goes through [`crate::runtime::tick_loop::TickStartup`] or the
+/// serve / final-reducer host. Out-of-crate harnesses use
+/// [`crate::state::AuthorityState::advance_tick_full`] instead. Visibility is
+/// pinned by `runtime::config` source guards (doctest `compile_fail` cannot
+/// prove this while the self `dev-dependency` unifies `test-support`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TickBudget {
     commands: usize,
@@ -469,7 +478,42 @@ pub struct TickBudget {
 }
 
 impl TickBudget {
+    /// Checked budget. Crate-private; `test-support` / unit tests see `pub`.
+    #[cfg(feature = "test-support")]
     pub fn try_new(
+        commands: usize,
+        fluid_updates_per_dimension: usize,
+        fluid_rescan_target_per_dimension: usize,
+        farmland_checks: usize,
+        farmland_block_reads: usize,
+    ) -> Result<Self, ServerError> {
+        Self::try_new_inner(
+            commands,
+            fluid_updates_per_dimension,
+            fluid_rescan_target_per_dimension,
+            farmland_checks,
+            farmland_block_reads,
+        )
+    }
+
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) fn try_new(
+        commands: usize,
+        fluid_updates_per_dimension: usize,
+        fluid_rescan_target_per_dimension: usize,
+        farmland_checks: usize,
+        farmland_block_reads: usize,
+    ) -> Result<Self, ServerError> {
+        Self::try_new_inner(
+            commands,
+            fluid_updates_per_dimension,
+            fluid_rescan_target_per_dimension,
+            farmland_checks,
+            farmland_block_reads,
+        )
+    }
+
+    fn try_new_inner(
         commands: usize,
         fluid_updates_per_dimension: usize,
         fluid_rescan_target_per_dimension: usize,
@@ -498,7 +542,18 @@ impl TickBudget {
         })
     }
 
+    /// Full ceilings. Crate-private; `test-support` / unit tests see `pub`.
+    #[cfg(feature = "test-support")]
     pub fn full() -> Self {
+        Self::full_inner()
+    }
+
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) fn full() -> Self {
+        Self::full_inner()
+    }
+
+    fn full_inner() -> Self {
         Self {
             commands: MAX_QUEUED_COMMANDS,
             fluid_updates_per_dimension: MAX_FLUID_UPDATES,

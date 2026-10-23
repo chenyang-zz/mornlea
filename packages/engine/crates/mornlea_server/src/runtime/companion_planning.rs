@@ -6,19 +6,25 @@
 //! checked seams, and the task runner owns all movement. One drive is one
 //! tick-boundary pass in the Go order: apply planner outcomes, expire and
 //! run tasks (inside the runner drive), then dispatch new planning. The
-//! dialogue and memory lanes keep their place in that order as
-//! placeholders only; this assembly does not drive them.
+//! dialogue and memory lanes keep their place in that order and are
+//! driven for real: speech lines are published, idle dialogue is
+//! dispatched through the Agent handle, and terminal memory reservations
+//! submit and poll Commit requests on the same handle.
 
 use std::collections::BTreeMap;
 
 use mornlea_domain::{CompanionId, TaskFailure, TaskState};
 
-use crate::agent::host::{InstallReject, PlanDispatch, PlanFailKind, PlanHost};
-use crate::contracts::{
-    AgentHandle, AgentRequestId, ClientInstanceId, Clock, LeaseId, NamespaceId, RunId, ServerError,
-    SnapshotPort,
+use crate::agent::host::{
+    DialogueAdmit, DialogueDispatch, InstallReject, PlanDispatch, PlanFailKind, PlanHost,
 };
-use crate::core::companion_chat::CompanionChatPhase;
+use crate::agent::memory::CommitReservation;
+use crate::contracts::{
+    ActorKey, ActorLifecycle, AgentHandle, AgentRequest, AgentRequestId, BaseIdentity,
+    ClientInstanceId, Clock, CommitRequest, DialogueEnvironment, DialogueFact, LeaseId,
+    LeasedIdentity, NamespaceId, RunId, ServerError, SnapshotPort,
+};
+use crate::core::companion_chat::{CompanionChatIssuer, CompanionChatPhase};
 use crate::core::companion_runner::TaskTimeoutMinutes;
 use crate::runtime::companion_runner::{PendingCompanionPaths, drive_companion_runners};
 use crate::state::AuthorityState;
@@ -57,6 +63,16 @@ pub struct CompanionPlanningReport {
     /// First-action envelopes the Agent host produced at install and the
     /// loop deliberately did not submit: the task runner owns movement.
     pub ignored_first_actions: usize,
+    /// Speech lines published from dialogue install this pass.
+    pub dialogue_lines: usize,
+    /// Idle (or other) dialogue requests actually submitted this pass.
+    pub dialogues_dispatched: usize,
+    /// Terminal memory reservations accepted this pass.
+    pub memory_reserved: usize,
+    /// Memory Commit requests submitted this pass.
+    pub memory_commits_submitted: usize,
+    /// Memory Commit polls that reached a terminal outcome this pass.
+    pub memory_commits_settled: usize,
 }
 
 /// Agent plan deadline handed to the host: thirty seconds from the
@@ -93,6 +109,63 @@ pub struct CompanionPlanLoop {
     host: PlanHost,
     tracked: BTreeMap<CompanionId, TrackedDispatch>,
     task_timeout: TaskTimeoutMinutes,
+    /// Last known chat issuer per companion (idle dialogue + speech).
+    last_issuers: BTreeMap<CompanionId, CompanionChatIssuer>,
+    /// Tick at which the next idle dialogue opportunity fires.
+    idle_due_tick: BTreeMap<CompanionId, u64>,
+    /// Terminal reservations awaiting Commit submit.
+    memory_reservations: BTreeMap<CompanionId, CommitReservation>,
+    /// In-flight memory Commit request ids.
+    memory_commits: BTreeMap<CompanionId, AgentRequestId>,
+}
+
+
+/// Go `pathfind.PathWindowHorizontalRadius` — idle audience uses the same
+/// horizontal radius as the path window (16 blocks, XZ only).
+const IDLE_DIALOGUE_DISTANCE_RADIUS: f32 = 16.0;
+
+/// Go `withinIdleDialogueDistance`: dx²+dz² ≤ radius² (radius = path window).
+fn within_idle_dialogue_distance(from: [f32; 3], to: [f32; 3]) -> bool {
+    let dx = from[0] - to[0];
+    let dz = from[2] - to[2];
+    dx * dx + dz * dz
+        <= IDLE_DIALOGUE_DISTANCE_RADIUS * IDLE_DIALOGUE_DISTANCE_RADIUS
+}
+
+/// Go `idleDialogueAudience`: follow target online (by player id) and within
+/// path-window horizontal distance of the companion body. Restored-only skips
+/// stay with Go's `issuer.restored` when that bit is plumbed onto last_issuers;
+/// fixtures capture live issuers with `session: None`, so session absence alone
+/// is not the restored gate.
+fn idle_dialogue_audience(
+    state: &AuthorityState,
+    issuer: &CompanionChatIssuer,
+    companion: mornlea_domain::CompanionId,
+) -> bool {
+    let actors = state.resident_actors();
+    let Some(body) = actors.iter().find(|actor| {
+        actor.key == ActorKey::Companion(companion)
+            && actor.lifecycle == ActorLifecycle::Active
+    }) else {
+        return false;
+    };
+    let Some(player) = actors.iter().find(|actor| {
+        let ActorKey::Player(session) = actor.key else {
+            return false;
+        };
+        if actor.lifecycle != ActorLifecycle::Active {
+            return false;
+        }
+        state
+            .session(session)
+            .is_some_and(|facts| facts.player_id == issuer.player_id)
+    }) else {
+        return false;
+    };
+    within_idle_dialogue_distance(
+        body.motion.position().get(),
+        player.motion.position().get(),
+    )
 }
 
 impl CompanionPlanLoop {
@@ -104,6 +177,10 @@ impl CompanionPlanLoop {
             host: PlanHost::default(),
             tracked: BTreeMap::new(),
             task_timeout,
+            last_issuers: BTreeMap::new(),
+            idle_due_tick: BTreeMap::new(),
+            memory_reservations: BTreeMap::new(),
+            memory_commits: BTreeMap::new(),
         }
     }
 
@@ -149,6 +226,10 @@ impl CompanionPlanLoop {
         } = ports;
         let mut report = CompanionPlanningReport::default();
 
+        // Memory lane: poll in-flight Commits before planner drain so the
+        // shared AgentHandle is free for PlanHost next.
+        report.memory_commits_settled = self.poll_memory_commits(agent);
+
         // Apply planner outcomes: poll once, then settle every outcome at
         // this tick boundary. Failures the host already classified finish
         // only their own companion's current task.
@@ -187,6 +268,19 @@ impl CompanionPlanLoop {
         let install_report = self
             .host
             .install_each(state.next_tick(), lease_fence, &worlds);
+        // Dialogue lane: publish speech for non-terminal lines.
+        report.dialogue_lines = self.publish_dialogue_lines(state, &install_report.lines)?;
+        // Memory lane: accept terminal reservations and submit Commit RPCs.
+        let (reserved, submitted) = self.accept_memory_reservations(
+            agent,
+            client,
+            namespace,
+            lease,
+            mint_id,
+            install_report.reservations.clone(),
+        )?;
+        report.memory_reserved = reserved;
+        report.memory_commits_submitted = submitted;
         // The host's first-action envelopes are deliberately not
         // submitted: the task runner below owns all movement.
         report.ignored_first_actions = install_report.envelopes.len();
@@ -260,9 +354,8 @@ impl CompanionPlanLoop {
 
         // Dispatch new planning. Chat promotion runs first at its place
         // in the order, so a task finished above can hand its slot to
-        // the next FIFO command in this same pass. The dialogue and
-        // memory lanes are placeholders in this order and are not driven
-        // here, beyond the dialogue gate check below.
+        // the next FIFO command in this same pass. Idle dialogue follows
+        // planning (Go dispatchIdleDialogues).
         state.prepare_companion_chat()?;
         for &companion in companions {
             if self.tracked.contains_key(&companion) || self.host.plan_inflight(companion) {
@@ -281,6 +374,8 @@ impl CompanionPlanLoop {
             let Some(taken) = state.take_companion_chat_planning(companion)? else {
                 continue;
             };
+            self.last_issuers
+                .insert(companion, taken.issuer.clone());
             let generation = taken.generation;
             if self.host.dialogue_inflight(companion) {
                 finish_failed(
@@ -379,7 +474,226 @@ impl CompanionPlanLoop {
                 Err(error) => return Err(error),
             }
         }
+
+        report.dialogues_dispatched = self.dispatch_idle_dialogues(
+            state,
+            companions,
+            agent,
+            clock,
+            client,
+            namespace,
+            lease,
+            mint_id,
+        )?;
         Ok(report)
+    }
+
+    /// Publishes install-report speech lines using the current or last issuer.
+    fn publish_dialogue_lines(
+        &self,
+        state: &mut AuthorityState,
+        lines: &[crate::agent::host::DialogueLine],
+    ) -> Result<usize, ServerError> {
+        let mut published = 0usize;
+        for line in lines {
+            let issuer = state
+                .companion_chat_queue(line.companion)
+                .and_then(|view| view.current.map(|task| task.issuer))
+                .or_else(|| self.last_issuers.get(&line.companion).cloned());
+            let Some(issuer) = issuer else {
+                continue;
+            };
+            state.publish_companion_speech(line.companion, &line.line, &issuer)?;
+            published += 1;
+        }
+        Ok(published)
+    }
+
+    /// Accepts terminal reservations and submits Commit requests on `agent`.
+    fn accept_memory_reservations(
+        &mut self,
+        agent: &mut dyn AgentHandle,
+        client: ClientInstanceId,
+        namespace: NamespaceId,
+        lease: Option<(LeaseId, u64)>,
+        mint_id: &mut dyn FnMut() -> Result<[u8; 16], ServerError>,
+        reservations: Vec<CommitReservation>,
+    ) -> Result<(usize, usize), ServerError> {
+        let mut reserved = 0usize;
+        for reservation in reservations {
+            if self.memory_reservations.contains_key(&reservation.companion) {
+                continue;
+            }
+            self.memory_reservations
+                .insert(reservation.companion, reservation);
+            reserved += 1;
+        }
+        let Some((lease_id, _)) = lease else {
+            return Ok((reserved, 0));
+        };
+        let mut submitted = 0usize;
+        let pending: Vec<CompanionId> = self
+            .memory_reservations
+            .keys()
+            .copied()
+            .filter(|id| !self.memory_commits.contains_key(id))
+            .collect();
+        for companion in pending {
+            let Some(reservation) = self.memory_reservations.get(&companion) else {
+                continue;
+            };
+            let request_id = AgentRequestId::try_from_bytes(mint_id()?).map_err(|_| {
+                ServerError::Internal {
+                    invariant: "memory commit request id",
+                }
+            })?;
+            let request = CommitRequest {
+                leased: LeasedIdentity {
+                    base: BaseIdentity {
+                        request_id,
+                        client_instance_id: client,
+                        namespace_id: namespace,
+                    },
+                    lease_id,
+                },
+                companion_id: companion,
+                memory_epoch: reservation.memory_epoch,
+                base_revision: reservation.base_revision,
+                operation_id: reservation.operation,
+                summary: reservation.summary.clone(),
+            };
+            agent.submit(AgentRequest::Commit(request))?;
+            self.memory_commits.insert(companion, request_id);
+            submitted += 1;
+        }
+        Ok((reserved, submitted))
+    }
+
+    /// Polls in-flight memory Commits; returns how many reached a terminal poll.
+    fn poll_memory_commits(&mut self, agent: &mut dyn AgentHandle) -> usize {
+        let pending: Vec<(CompanionId, AgentRequestId)> = self
+            .memory_commits
+            .iter()
+            .map(|(c, id)| (*c, *id))
+            .collect();
+        let mut settled = 0usize;
+        for (companion, request_id) in pending {
+            let poll = agent.poll(request_id);
+            match poll {
+                crate::contracts::AgentPoll::Pending => {}
+                crate::contracts::AgentPoll::Completed(
+                    crate::contracts::AgentResponse::Commit(_),
+                ) => {
+                    self.memory_commits.remove(&companion);
+                    self.memory_reservations.remove(&companion);
+                    settled += 1;
+                }
+                crate::contracts::AgentPoll::Completed(_)
+                | crate::contracts::AgentPoll::Failed(_) => {
+                    // Drop the reservation too: a failed/mismatched poll must
+                    // not leave a stuck CommitReservation blocking the lane.
+                    self.memory_commits.remove(&companion);
+                    self.memory_reservations.remove(&companion);
+                    settled += 1;
+                }
+            }
+        }
+        settled
+    }
+
+    /// Dispatches idle dialogue for companions with no current/pending task.
+    fn dispatch_idle_dialogues(
+        &mut self,
+        state: &mut AuthorityState,
+        companions: &[CompanionId],
+        agent: &mut dyn AgentHandle,
+        clock: &dyn Clock,
+        client: ClientInstanceId,
+        namespace: NamespaceId,
+        lease: Option<(LeaseId, u64)>,
+        mint_id: &mut dyn FnMut() -> Result<[u8; 16], ServerError>,
+    ) -> Result<usize, ServerError> {
+        let Some((lease_id, lease_fence)) = lease else {
+            return Ok(0);
+        };
+        let now = state.next_tick();
+        let mut dispatched = 0usize;
+        for &companion in companions {
+            if self.tracked.contains_key(&companion) || self.host.plan_inflight(companion) {
+                continue;
+            }
+            if self.host.dialogue_inflight(companion) {
+                continue;
+            }
+            let Some(view) = state.companion_chat_queue(companion) else {
+                continue;
+            };
+            if view.current.is_some() || !view.pending.is_empty() {
+                self.idle_due_tick.remove(&companion);
+                continue;
+            }
+            let Some(issuer) = self.last_issuers.get(&companion).cloned() else {
+                continue;
+            };
+            // Go idleDialogueAudience: online follow target within path-window.
+            if !idle_dialogue_audience(&state, &issuer, companion) {
+                continue;
+            }
+            match self.idle_due_tick.get(&companion).copied() {
+                None => {
+                    // First idle opportunity: arm at the current tick (fires next drive).
+                    self.idle_due_tick
+                        .insert(companion, now);
+                    continue;
+                }
+                Some(due) if now < due => continue,
+                Some(due) => {
+                    self.idle_due_tick
+                        .insert(companion, due.saturating_add(1));
+                }
+            }
+            let Some(generation) = state.companion_chat_generation(companion) else {
+                continue;
+            };
+            if generation == 0 {
+                continue;
+            }
+            let request_id = AgentRequestId::try_from_bytes(mint_id()?).map_err(|_| {
+                ServerError::Internal {
+                    invariant: "idle dialogue request id",
+                }
+            })?;
+            let run_id = RunId::try_from_bytes(mint_id()?).map_err(|_| ServerError::Internal {
+                invariant: "idle dialogue run id",
+            })?;
+            let admit = self.host.dispatch_dialogue(
+                agent,
+                clock,
+                DialogueDispatch {
+                    companion,
+                    generation,
+                    memory_epoch: 0,
+                    request_id,
+                    run_id,
+                    client,
+                    namespace,
+                    lease: lease_id,
+                    lease_fence,
+                    persona: String::new(),
+                    fact: DialogueFact::Idle,
+                    environment: DialogueEnvironment {
+                        exposed_blocks: Vec::new(),
+                        heights: Vec::new(),
+                    },
+                    terminal: false,
+                    deadline_unix_ms: clock.unix_ms().saturating_add(PLAN_DEADLINE_MS),
+                },
+            )?;
+            if matches!(admit, DialogueAdmit::Admitted { .. }) {
+                dispatched += 1;
+            }
+        }
+        Ok(dispatched)
     }
 }
 
@@ -460,9 +774,66 @@ pub(crate) mod tests {
                 })),
             );
         }
-        fn fail(&mut self, request: &crate::contracts::PlanRequest, error: ServerError) {
+        pub(crate) fn fail(&mut self, request: &crate::contracts::PlanRequest, error: ServerError) {
             self.terminals
                 .insert(request.leased.base.request_id, AgentPoll::Failed(error));
+        }
+        pub(crate) fn dialogue_requests(&self) -> Vec<crate::contracts::DialogueRequest> {
+            self.submitted
+                .iter()
+                .filter_map(|request| match request {
+                    AgentRequest::Dialogue(d) => Some(d.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        pub(crate) fn commit_requests(&self) -> Vec<crate::contracts::CommitRequest> {
+            self.submitted
+                .iter()
+                .filter_map(|request| match request {
+                    AgentRequest::Commit(c) => Some(c.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        pub(crate) fn complete_dialogue(
+            &mut self,
+            request: &crate::contracts::DialogueRequest,
+            line: &str,
+            proposal: Option<crate::contracts::MemoryProposal>,
+        ) {
+            self.terminals.insert(
+                request.leased.base.request_id,
+                AgentPoll::Completed(AgentResponse::Dialogue(
+                    crate::contracts::DialogueResponse {
+                        leased: request.leased.clone(),
+                        run_id: request.run_id,
+                        companion_id: request.companion_id,
+                        generation: request.generation,
+                        memory_epoch: request.memory_epoch,
+                        line: line.to_owned(),
+                        memory_proposal: proposal,
+                    },
+                )),
+            );
+        }
+        pub(crate) fn complete_commit(
+            &mut self,
+            request: &crate::contracts::CommitRequest,
+            revision: u64,
+        ) {
+            self.terminals.insert(
+                request.leased.base.request_id,
+                AgentPoll::Completed(AgentResponse::Commit(
+                    crate::contracts::CommitResponse {
+                        leased: request.leased.clone(),
+                        companion_id: request.companion_id,
+                        memory_epoch: request.memory_epoch,
+                        operation_id: request.operation_id,
+                        committed_revision: std::num::NonZeroU64::new(revision).unwrap(),
+                    },
+                )),
+            );
         }
     }
 
@@ -471,6 +842,7 @@ pub(crate) mod tests {
             let id = match &request {
                 AgentRequest::Plan(plan) => plan.leased.base.request_id,
                 AgentRequest::Dialogue(d) => d.leased.base.request_id,
+                AgentRequest::Commit(c) => c.leased.base.request_id,
                 AgentRequest::Cancel(c) => c.leased.base.request_id,
                 _ => {
                     return Err(ServerError::InvalidInput {
@@ -1560,4 +1932,269 @@ pub(crate) mod tests {
                 .is_none()
         );
     }
+
+    /// Dialogue lane: a completed Dialogue RPC is drained, installed, and
+    /// published as ChatBody::Speech — real send + receive in the tick.
+    #[test]
+    fn plan_loop_dialogue_line_publishes_speech_after_agent_roundtrip() {
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        // Take planning so last_issuers is populated for speech publish.
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(rig.agent.plan_requests().len(), 1);
+
+        let dispatch = DialogueDispatch {
+            companion: id,
+            generation: 1,
+            memory_epoch: 0,
+            request_id: AgentRequestId::try_from_bytes(uuid(71)).unwrap(),
+            run_id: RunId::try_from_bytes(uuid(72)).unwrap(),
+            client: crate::contracts::ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+            namespace: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+            lease: Lease::try_from_bytes(uuid(30)).unwrap(),
+            lease_fence: 9,
+            persona: "calm".to_owned(),
+            fact: DialogueFact::Start,
+            environment: DialogueEnvironment {
+                exposed_blocks: vec![],
+                heights: vec![],
+            },
+            terminal: false,
+            deadline_unix_ms: rig.clock.unix_ms() + 30_000,
+        };
+        plan_loop
+            .host_mut()
+            .dispatch_dialogue(&mut rig.agent, &rig.clock, dispatch)
+            .unwrap();
+        let dialogue = rig.agent.dialogue_requests().last().cloned().unwrap();
+        rig.agent
+            .complete_dialogue(&dialogue, "hello from lane", None);
+
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(report.dialogue_lines, 1, "install must yield a speech line");
+        let speech = fixture
+            .authority
+            .take_decided_chat_facts()
+            .into_iter()
+            .filter(|fact| matches!(fact.body, ChatBody::Speech { .. }))
+            .count();
+        assert_eq!(speech, 1, "speech fact must be published");
+    }
+
+    /// Idle dialogue lane: after the companion is idle with a remembered
+    /// issuer, the next armed drive submits a real Dialogue Idle RPC.
+    #[test]
+    fn plan_loop_idle_dialogue_submits_after_arm() {
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        // Fail the plan so the companion becomes idle with last_issuers set.
+        let plan = rig.agent.plan_requests()[0].clone();
+        rig.agent.fail(
+            &plan,
+            ServerError::Agent {
+                code: crate::contracts::AgentErrorCode::AgentUnavailable,
+                status: 503,
+            },
+        );
+        // Failing the plan clears the current task; idle arms on that same drive.
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(report.dialogues_dispatched, 0, "fail drive only arms idle");
+        // Next drive fires the armed idle dialogue.
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(report.dialogues_dispatched, 1);
+        let idle = rig
+            .agent
+            .dialogue_requests()
+            .into_iter()
+            .filter(|d| d.fact_node == DialogueFact::Idle)
+            .count();
+        assert_eq!(idle, 1, "idle Dialogue must be submitted on the agent");
+    }
+
+    /// Idle audience refuses when the online issuer is outside the path-window
+    /// horizontal radius (Go withinIdleDialogueDistance).
+    #[test]
+    fn plan_loop_idle_dialogue_skips_when_issuer_out_of_range() {
+        let (mut fixture, id) = queued_fixture();
+        let issuer_id = fixture
+            .authority
+            .companion_chat_queue(id)
+            .unwrap()
+            .current
+            .unwrap()
+            .issuer
+            .player_id;
+        // Path window radius is 16; drift 5 cells per call — eight times → 40.
+        for _ in 0..8 {
+            crate::core::state::companion_planning::tests::drift_online_player(
+                &mut fixture.authority,
+                issuer_id,
+            );
+        }
+
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        let plan = rig.agent.plan_requests()[0].clone();
+        rig.agent.fail(
+            &plan,
+            ServerError::Agent {
+                code: crate::contracts::AgentErrorCode::AgentUnavailable,
+                status: 503,
+            },
+        );
+        let _ = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(
+            report.dialogues_dispatched, 0,
+            "out-of-range issuer must not get idle dialogue"
+        );
+        assert!(
+            rig.agent.dialogue_requests().is_empty(),
+            "no Dialogue RPC when audience is out of range"
+        );
+    }
+
+    /// Memory lane: a terminal dialogue reservation submits Commit and a
+    /// later drive settles the poll — real send + receive.
+    #[test]
+    fn plan_loop_memory_commit_roundtrip_on_terminal_dialogue() {
+        let (mut fixture, id) = queued_fixture();
+        let mut plan_loop = CompanionPlanLoop::new(timeout());
+        let mut rig = Rig::new();
+        let mut pending = PendingCompanionPaths::new();
+        drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+
+        let op = crate::contracts::OperationId::try_from_bytes(uuid(60)).unwrap();
+        let dispatch = DialogueDispatch {
+            companion: id,
+            generation: 1,
+            memory_epoch: 1,
+            request_id: AgentRequestId::try_from_bytes(uuid(81)).unwrap(),
+            run_id: RunId::try_from_bytes(uuid(82)).unwrap(),
+            client: crate::contracts::ClientInstanceId::try_from_bytes(uuid(2)).unwrap(),
+            namespace: NamespaceId::try_from_bytes(uuid(3)).unwrap(),
+            lease: Lease::try_from_bytes(uuid(30)).unwrap(),
+            lease_fence: 9,
+            persona: "calm".to_owned(),
+            fact: DialogueFact::Terminal {
+                failed: false,
+                reason: crate::contracts::DialogueFailure::None,
+            },
+            environment: DialogueEnvironment {
+                exposed_blocks: vec![],
+                heights: vec![],
+            },
+            terminal: true,
+            deadline_unix_ms: rig.clock.unix_ms() + 30_000,
+        };
+        plan_loop
+            .host_mut()
+            .dispatch_dialogue(&mut rig.agent, &rig.clock, dispatch)
+            .unwrap();
+        let dialogue = rig.agent.dialogue_requests().last().cloned().unwrap();
+        rig.agent.complete_dialogue(
+            &dialogue,
+            "done.",
+            Some(crate::contracts::MemoryProposal {
+                operation_id: op,
+                base_revision: 0,
+                summary: "finished".to_owned(),
+            }),
+        );
+
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(report.memory_reserved, 1);
+        assert_eq!(report.memory_commits_submitted, 1);
+        assert_eq!(rig.agent.commit_requests().len(), 1);
+        let commit = rig.agent.commit_requests()[0].clone();
+        rig.agent.complete_commit(&commit, 1);
+
+        let report = drive(
+            &mut plan_loop,
+            &mut fixture.authority,
+            &[id],
+            &mut pending,
+            &mut rig,
+        )
+        .unwrap();
+        assert_eq!(report.memory_commits_settled, 1);
+    }
+
 }

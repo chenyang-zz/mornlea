@@ -24,7 +24,7 @@ fixtures in `packages/shared/config/testdata/parity/` are checked by both
 change to either loader must keep both green. `RuntimeConfig::resolve`
 mirrors Go `LoadDefault` path and permission checks read-only. After freeze,
 callers pass plain values (`RuleTunables`, raw fluid budgets, flags, logging)
-into `core`; `runtime` never constructs `TickBudget`. `core`, `rules`,
+into `core`; `TickBudget` constructors are `pub(crate)` (or `pub` with `test-support`); `TickStartup` and the serve host construct them, other `runtime` modules still only carry values. `core`, `rules`,
 `store`, `transport`, and `agent` must not reference `runtime::` —
 enforced by `runtime::config::tests::dependency_direction_forbids_runtime_imports`.
 

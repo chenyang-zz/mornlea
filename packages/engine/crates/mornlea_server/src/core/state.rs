@@ -784,6 +784,20 @@ impl AuthorityState {
         retained
     }
 
+    /// One tick at full ceilings. Out-of-crate harnesses use this instead of
+    /// constructing [`TickBudget`] (constructors are crate-private).
+    pub fn advance_tick_full(&mut self) -> Result<TickPublication, ServerError> {
+        self.advance_tick(TickBudget::full())
+    }
+
+    /// One tick with a checked command ceiling and zero fluid/farmland work.
+    pub fn advance_tick_commands(
+        &mut self,
+        commands: usize,
+    ) -> Result<TickPublication, ServerError> {
+        self.advance_tick(TickBudget::try_new(commands, 0, 0, 0, 0)?)
+    }
+
     pub fn advance_tick(&mut self, work: TickBudget) -> Result<TickPublication, ServerError> {
         if let Some(error) = self.tick_failure {
             return Err(error);
@@ -1751,6 +1765,41 @@ impl AuthorityState {
     /// Clones the bounded queue view for one configured companion.
     pub fn companion_chat_queue(&self, id: CompanionId) -> Option<CompanionChatQueueView> {
         self.companion_chat.queue_view(id)
+    }
+
+    /// Slot generation for dialogue dispatch when no current task is held.
+    pub fn companion_chat_generation(&self, id: CompanionId) -> Option<u64> {
+        self.companion_chat.slot_generation(id)
+    }
+
+    /// Publishes one companion speech line as a broadcast chat fact.
+    ///
+    /// Expression-plane only: does not mutate tasks, FIFO, path, or world.
+    /// The issuer names the chat envelope; the companion speaks the line.
+    pub fn publish_companion_speech(
+        &mut self,
+        companion: CompanionId,
+        line: &str,
+        issuer: &CompanionChatIssuer,
+    ) -> Result<(), ServerError> {
+        let text = mornlea_domain::SpeechText::try_from_canonical(line.to_owned()).map_err(
+            |_| ServerError::InvalidInput {
+                field: "dialogue_line",
+            },
+        )?;
+        let speaker = self.companion_chat.speaker(companion).ok_or(
+            ServerError::InvalidInput {
+                field: "companion_speech",
+            },
+        )?;
+        self.companion_chat.push_decided(DecidedChatFact::broadcast(
+            issuer.player_id,
+            issuer.player_name.clone(),
+            ChatBody::Speech {
+                companion: speaker,
+                text,
+            },
+        ))
     }
 
     /// Takes the current queued task into planning, returning it exactly once.
@@ -5523,6 +5572,11 @@ impl<'a> TickContext<'a> {
         Self::from_parts(authority, budget)
     }
 
+    /// Out-of-crate harness entry that does not need `TickBudget` constructors.
+    pub fn harness_full(authority: &'a mut AuthorityState) -> Self {
+        Self::harness(authority, TickBudget::full())
+    }
+
     /// Between-tick staging context seeded from the committed residents,
     /// mirroring the production tick's seeding so fixtures staged between two
     /// ticks preserve every resident lane. The caller commits through
@@ -5530,6 +5584,11 @@ impl<'a> TickContext<'a> {
     /// staging path; dropping the context restores the untouched residents.
     pub fn restage(authority: &'a mut AuthorityState, budget: TickBudget) -> Self {
         Self::for_tick(authority, budget)
+    }
+
+    /// Out-of-crate harness entry that does not need `TickBudget` constructors.
+    pub fn restage_full(authority: &'a mut AuthorityState) -> Self {
+        Self::restage(authority, TickBudget::full())
     }
 
     /// Production tick context. The serial reducer owns the only call; the
