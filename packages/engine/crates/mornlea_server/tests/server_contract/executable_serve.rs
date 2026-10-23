@@ -165,6 +165,174 @@ fn serve_mode_without_max_ticks_stops_on_sigterm() {
     );
 }
 
+/// Two TCP players join Play; the leaving peer's RemotePlayerDespawn must
+/// reach the remaining peer (Owen: cross-peer retirement executable evidence).
+#[test]
+fn serve_cross_peer_remote_player_despawn() {
+    let bin = env!("CARGO_BIN_EXE_mornlea-server");
+    let root = tempfile_world("cross-peer-despawn");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let listen = format!("127.0.0.1:{port}");
+
+    let mut child = Command::new(bin)
+        .args([
+            "--serve",
+            "--world",
+            root.to_str().unwrap(),
+            "--listen",
+            &listen,
+            "--max-ticks",
+            "200",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mornlea-server --serve");
+
+    let stdout_pipe = child.stdout.take().expect("stdout pipe");
+    let ready_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ready_flag_bg = std::sync::Arc::clone(&ready_flag);
+    let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stdout_buf_bg = std::sync::Arc::clone(&stdout_buf);
+    std::thread::spawn(move || {
+        let mut reader = stdout_pipe;
+        let mut chunk = [0u8; 512];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&chunk[..n]);
+                    let mut guard = stdout_buf_bg.lock().unwrap();
+                    guard.push_str(&text);
+                    if guard.contains("serve ready") {
+                        ready_flag_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let ready_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if Instant::now() > ready_deadline {
+            let _ = child.kill();
+            let captured = stdout_buf.lock().unwrap().clone();
+            panic!("server never printed serve ready; stdout={captured}");
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            let captured = stdout_buf.lock().unwrap().clone();
+            panic!("server exited before ready: {status}; stdout={captured}");
+        }
+        if ready_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let addr: std::net::SocketAddr = listen.parse().unwrap();
+    let mut keeper = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).unwrap();
+    keeper
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    keeper
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    handshake_login_as(&mut keeper, 0x31, "Keeper");
+
+    let mut leaver = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).unwrap();
+    leaver
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    leaver
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let leaving_id = mornlea_domain::PlayerId::try_from_bytes(raw_id(0x32)).unwrap();
+    handshake_login_as(&mut leaver, 0x32, "Leaver");
+
+    // Wait until keeper sees the leaver spawn (same chunk view).
+    let mut buffer = Vec::new();
+    let mut saw_spawn = false;
+    let spawn_until = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < spawn_until && !saw_spawn {
+        let mut chunk = [0u8; 4096];
+        match keeper.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("keeper read: {error}"),
+        }
+        while let Ok(frame) = read_frame_ref(&buffer) {
+            let consumed = frame.consumed;
+            let packet = ProtocolCodec::new().unwrap().decode_server(
+                State::Play,
+                frame.packet_id,
+                frame.payload,
+            );
+            buffer.drain(..consumed);
+            if let Ok(ServerPacket::RemotePlayerSpawn(spawn)) = packet {
+                if spawn.player_id.bytes() == leaving_id.bytes() {
+                    saw_spawn = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_spawn,
+        "keeper never saw RemotePlayerSpawn for leaver; stdout={}",
+        stdout_buf.lock().unwrap()
+    );
+
+    // Drop the leaver socket: serve pump_in EOF retires the session.
+    drop(leaver);
+
+    let mut saw_despawn = false;
+    let despawn_until = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < despawn_until && !saw_despawn {
+        let mut chunk = [0u8; 4096];
+        match keeper.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("keeper read after leave: {error}"),
+        }
+        while let Ok(frame) = read_frame_ref(&buffer) {
+            let consumed = frame.consumed;
+            let packet = ProtocolCodec::new().unwrap().decode_server(
+                State::Play,
+                frame.packet_id,
+                frame.payload,
+            );
+            buffer.drain(..consumed);
+            if let Ok(ServerPacket::RemotePlayerDespawn(despawn)) = packet {
+                if despawn.player.bytes() == leaving_id.bytes() {
+                    saw_despawn = true;
+                }
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        saw_despawn,
+        "keeper never saw RemotePlayerDespawn for leaver; stdout={}",
+        stdout_buf.lock().unwrap()
+    );
+}
+
 /// Start the binary with a configured companion that already holds a Running
 /// go_to, connect a real TCP client, and require CompanionStates whose
 /// position changes (Owen: companion actually moves + state reaches client).
@@ -346,6 +514,10 @@ fn positions_moved(positions: &[[f32; 3]]) -> bool {
 }
 
 fn handshake_login(stream: &mut TcpStream) {
+    handshake_login_as(stream, 0x21, "Ada");
+}
+
+fn handshake_login_as(stream: &mut TcpStream, tag: u8, name: &str) {
     let version = Identities::current().protocol;
     let hello =
         ClientPacket::ClientHello(ClientHello::decode_inbound(&encode_uvarint(version)).unwrap());
@@ -359,9 +531,9 @@ fn handshake_login(stream: &mut TcpStream) {
         "expected ServerHello, got {packet:?}"
     );
 
-    let player = mornlea_domain::PlayerId::try_from_bytes(raw_id(0x21)).unwrap();
+    let player = mornlea_domain::PlayerId::try_from_bytes(raw_id(tag)).unwrap();
     let start = ClientPacket::LoginStart(
-        LoginStart::decode_inbound(&LoginStart::new(player, "Ada", 8).unwrap().encode().unwrap())
+        LoginStart::decode_inbound(&LoginStart::new(player, name, 8).unwrap().encode().unwrap())
             .unwrap(),
     );
     stream

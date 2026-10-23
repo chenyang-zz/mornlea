@@ -2,8 +2,8 @@
 //!
 //! The binary only parses flags and calls [`run`]. Tick pacing lives here via
 //! [`super::host_tick`]. Configuration-file consumption beyond load/defaults
-//! and fluid rescan stay in later PRs. Observer / dialogue-memory lanes are
-//! not wired here yet (Owen open).
+//! and fluid rescan stay in later PRs. Trusted observer is enabled here; host Attach endpoint and
+//! dialogue-memory lanes stay stacked follow-ups (Owen).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -232,6 +232,12 @@ pub fn run(options: ServeOptions, stop: Arc<AtomicBool>) -> Result<u64, ServeErr
                 records: vec![],
             },
         )
+        .map_err(ServeError::Authority)?;
+    // Executable adoption of the trusted-observer library (Owen): serve
+    // enables the flag so attach/center APIs are live; host Attach endpoint
+    // wiring stays a stacked follow-up.
+    authority
+        .set_trusted_observer_enabled(true)
         .map_err(ServeError::Authority)?;
 
     let clock = SystemClock;
@@ -700,6 +706,10 @@ mod tests {
         assert!(
             production.contains("tick.step(") || production.contains("ServerTick"),
             "production serve must call ServerTick::step"
+        );
+        assert!(
+            production.contains("set_trusted_observer_enabled"),
+            "production serve must enable the trusted observer flag"
         );
     }
 
