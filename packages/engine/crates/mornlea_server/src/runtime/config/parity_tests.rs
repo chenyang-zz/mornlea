@@ -166,7 +166,7 @@ fn good_ai_fixtures_freeze_go_values() {
             companions,
             ai.endpoint().to_owned(),
             ai.api_key_env().to_owned(),
-            ai.task_timeout_minutes(),
+            ai.task_timeout_minutes().get(),
         )
     };
     assert_eq!(

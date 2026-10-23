@@ -135,7 +135,8 @@ impl PendingCompanionPaths {
 /// One assembly pass a later tick loop can call: deliver the outcomes
 /// held from the previous pass to the authority, then run the searches
 /// the authority asks for and hold their outcomes for the next pass.
-/// Movement actions from the authority pass are returned untouched;
+/// Movement and interaction actions from the authority pass are returned
+/// untouched;
 /// submitting them to the tick stays with the caller.
 pub fn drive_companion_runners(
     state: &mut AuthorityState,

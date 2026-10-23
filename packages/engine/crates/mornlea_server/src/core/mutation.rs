@@ -237,7 +237,7 @@ fn item_placement(item: u16) -> Option<u16> {
 /// (`packages/shared/core/item.go`). The mining-rule table owns mineability;
 /// short grass and snow use special no-body output paths, while protected
 /// blocks have no progression (`packages/server/sim/entity/mining.go`).
-fn block_drop(block: u16) -> Option<u16> {
+pub(crate) fn block_drop(block: u16) -> Option<u16> {
     match block {
         2 => Some(1),        // StoneID -> ItemStone
         3 => Some(2),        // DirtID -> ItemDirt
