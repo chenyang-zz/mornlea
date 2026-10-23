@@ -184,20 +184,92 @@ impl AgentServices {
         &self.snapshots
     }
 
-    /// Stops MCP admission and the snapshot registry, then closes the lease
-    /// controller and its control worker, all within one absolute deadline.
-    pub fn close_until(&mut self, deadline: Deadline) -> Result<(), ServerError> {
-        self.mcp.close_until(deadline)?;
-        self.lease.close(deadline)?;
+    /// Mutable lease controller. Shutdown releases and closes through the
+    /// [`AgentHandle`] implementation rather than a combined close.
+    pub fn lease_mut(&mut self) -> &mut LeaseController {
+        &mut self.lease
+    }
+
+    /// Mutable MCP service for the [`McpLifecycle`] close phase.
+    pub fn mcp_mut(&mut self) -> &mut McpService {
+        &mut self.mcp
+    }
+
+    /// Marks the services closed after an explicit phased shutdown so Drop
+    /// does not close them again.
+    pub fn mark_closed(&mut self) {
         self.closed = true;
-        Ok(())
+    }
+
+    /// Splits the lease and MCP handles for [`crate::core::shutdown::ShutdownPorts`].
+    ///
+    /// Release, AgentClose and McpClose run as separate core phases; the two
+    /// mutable borrows cannot share one `AgentServices` slot.
+    pub fn shutdown_handles(
+        &mut self,
+    ) -> (&mut dyn crate::contracts::AgentHandle, &mut dyn crate::contracts::McpLifecycle) {
+        (&mut self.lease, &mut self.mcp)
+    }
+}
+
+/// Lease release and close follow Go `host_shutdown.go:124-145`: freeze and
+/// release first; a failed release keeps the lease, Agent and MCP for retry;
+/// only a successful release proceeds to close the lease (AgentClose).
+impl AgentHandle for AgentServices {
+    fn submit(&mut self, request: crate::contracts::AgentRequest) -> Result<crate::contracts::AgentRequestId, ServerError> {
+        self.lease.submit(request)
+    }
+
+    fn poll(&mut self, id: crate::contracts::AgentRequestId) -> crate::contracts::AgentPoll {
+        self.lease.poll(id)
+    }
+
+    fn cancel(
+        &mut self,
+        id: crate::contracts::AgentRequestId,
+        deadline: Deadline,
+    ) -> Result<(), ServerError> {
+        self.lease.cancel(id, deadline)
+    }
+
+    fn freeze(&mut self, clock: &dyn Clock) -> Option<crate::contracts::FrozenLease> {
+        self.lease.freeze(clock)
+    }
+
+    fn release(
+        &mut self,
+        lease: &crate::contracts::FrozenLease,
+        deadline: Deadline,
+    ) -> Result<(), ServerError> {
+        self.lease.release(lease, deadline)
+    }
+
+    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
+        self.lease.close(deadline)
+    }
+}
+
+/// MCP close follows Go `host_shutdown.go:148` after the lease and Agent close.
+impl crate::contracts::McpLifecycle for AgentServices {
+    fn close(&mut self, deadline: Deadline) -> Result<(), ServerError> {
+        let result = self.mcp.close_until(deadline);
+        if result.is_ok() {
+            self.closed = true;
+        }
+        result
     }
 }
 
 impl Drop for AgentServices {
     fn drop(&mut self) {
         if !self.closed {
-            let _ = self.close_until(close_deadline());
+            // Best-effort teardown outside the shutdown machine: lease then
+            // MCP, matching the successful Go close order, with no release
+            // (release belongs to an explicit shutdown attempt).
+            let deadline = close_deadline();
+            let _ = self.lease.close(deadline);
+            let _ = self.mcp.close_until(deadline);
+            self.closed = true;
         }
     }
 }
@@ -287,7 +359,10 @@ pub fn start_companions(
         .map_err(CompanionStartError::Agent)?;
     let mut agent = start_agent(wire, client, namespace, clock)?;
     if let Err(error) = state.enable_companion_persistence(ai.companions(), durable) {
-        let _ = agent.close_until(close_deadline());
+        let deadline = close_deadline();
+        let _ = agent.lease.close(deadline);
+        let _ = agent.mcp.close_until(deadline);
+        agent.closed = true;
         return Err(CompanionStartError::Authority(error));
     }
     Ok(Some(CompanionRuntime {

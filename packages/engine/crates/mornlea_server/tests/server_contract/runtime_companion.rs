@@ -410,7 +410,14 @@ fn first_tick(state: &mut AuthorityState, disk: DiskStore) -> AutosaveScheduler<
 }
 
 fn close(mut runtime: CompanionRuntime) {
-    runtime.agent_mut().close_until(deadline()).unwrap();
+    use mornlea_server::contracts::{AgentHandle, McpLifecycle};
+    let clock = SystemClock;
+    let agent = runtime.agent_mut();
+    if let Some(lease) = agent.freeze(&clock) {
+        agent.release(&lease, deadline()).unwrap();
+    }
+    AgentHandle::close(agent, deadline()).unwrap();
+    McpLifecycle::close(agent, deadline()).unwrap();
     assert_eq!(runtime.agent().lease_phase(), ControlPhase::Closed);
 }
 
