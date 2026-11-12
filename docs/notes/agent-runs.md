@@ -693,3 +693,22 @@
   5. `B-36` 维持就绪（本谱系自 2026-10-25 起、逐轮复核至本轮）：认领须遵循 P14 玩法批处理（Go/Rust 成对 + parity）；孤儿分支 `codex/b36-axes-shovels`（完整实现、协议 v45 撞号、从未推送）收编或重做沿 B-11 先例由控制会话裁决。
   6. `rust-authoritative-server` 剩 4.1/4.3/4.9 零推进（`origin/dev` 自 2026-10-23 静默）：4.3 为 F2 归档门（若 F2 先归档须显式移交 P14 `godot-default-client-switch`）；4.9 待用户裁决。
   7. 本机 `dev` 检出 `a495d1218` 落后 `origin/dev` 且带未提交删除（`.superpowers/sdd/`、`docs/superpowers/` 等），主检出旧快照已多次造成误读，建议用户优先快进并处置工作区；遗留未动项照旧（重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 无本机 worktree、无 backlog 行已合入 change 是否追溯补行待用户裁决）。
+
+## 2026-11-12 09:16 CST（规划者第三十六轮 · 静默复核轮）
+
+- **谱系**：本轮以远端完整 `planner/*` 列表的最新分支 `origin/planner/2026-11-11`（第三十五轮，未入 `origin/dev`）为上轮边界续接，自其拉 `planner/2026-11-12`（启动时无当日先占分支，无分裂、无重复合并）；主检出 `dev`（`a495d1218`）仅作只读参照，未触碰其未提交删除与用户文件。
+- **读取输入**：`docs/feature-backlog.md` 与 `docs/notes/agent-runs.md`（11-11 版）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵不变：协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、Discussion #71（ego-browser 渲染网页读取：页面正常存活，**68 条评论零新增**（末条仍 2026-09-13T18:53:47Z）、正文仍为旧镜像（不含 B-47..B-62/D-22 行）、无禁用提示，**自上轮以来无新评论、无正文更新**）、`origin/dev`（HTTPS fetch 报 443 连接失败一次，改经 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git` 拉取全部远端引用**零变化**：头仍 `525aacdf3`，2026-10-23 起静默零推进）与 `origin/main`（头仍 `cad19e9c9`）、非 planner 远端分支按提交日期复核（最新仍 2026-10-23 `ethan/executable-entry`，无新增分支）、`git worktree list`（本机仅主检出）、`codex/b36-axes-shovels` 复核（本地头仍 `2a745374` 零推进、`ls-remote` 确认远端无此分支、`merge-base` 确认未并入 `origin/dev`/`origin/main`、无对应 worktree）、归档横扫（`origin/dev` 树自 2026-10-11 后零新归档且本轮全引用拉取零变化，横扫范围为空）、`refresh-discussion.py` dry-run（在规划 worktree 内对最终表运行）。
+- **变更行**：**无新增行、无状态变更**——dry-run 计数与第三十五轮逐组一致（已认领 1 / 就绪 1 / 排队 29 / 设计候选 42 / 已完成 56 / 已取消 6），各组尾号不变（B-62/D-22/E-21/F-11/C-11）。校对一处：`B-36` 追加 2026-11-12 复核句（分支头仍 `2a745374` 零推进、仅存本地、远端无此分支、未并入 `origin/dev`/`origin/main`、无对应 worktree，晋升三前提独立复核仍成立，维持 `就绪`）。晋升检查：串行队首 B-36 已就绪在位，无第二个可晋升行（版本互斥）。
+- **未落行（判定）**：三通道为空——a) 讨论自 2026-09-13 后零新评论（本轮浏览器通道复核 68 条计数与末条时间戳均不变）；b) 上轮以来零新归档（本轮 SSH 拉取全引用零变化，`origin/dev` 自 2026-10-23 静默）；c) MC 覆盖 2026-09-29 已全量复核且其后零玩法合入。待澄清累计清单无增删。
+- **提交**：两笔——backlog 提交 `2ddd549f1`（仅 B-36 复核句）与本运行记录提交；均在临时 worktree `/tmp/mornlea-planner-20261112` 制作，不触碰本机 `dev` 主检出与用户未跟踪文件。
+- **推送**：`planner/2026-11-12` 经 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git` 推送（HTTPS fetch 本轮报 443 连接失败，SSH 沿既有先例；新分支首推，无强推）。
+- **PR**：`gh auth status` 复核 chenyang-zz token 仍 invalid（连续多轮失败链）——按 11-10/11-11 先例不实执行注定失败的 `gh pr create`；评审者可经 `https://github.com/chenyang-zz/mornlea/compare/dev...planner/2026-11-12` 手动开 PR；规划者不直推 `dev`/`main`、不自行合并。
+- **讨论同步**：未执行——`gh` token invalid；本轮无行状态变化（B-36 维持就绪为复核非变更），按「无变化轮次不发评论」规则无状态变更评论。正文镜像仍落后（缺就绪组与 B-47 起新行），待凭据恢复后一次 `--update` 补齐。
+- **留给下一轮 / 用户**（沿第三十五轮七项，无新增项）：
+  1. 防分裂护栏：连续多轮未再分裂（本轮启动时无 `planner/2026-11-12` 先占分支），根因（main 侧残留会话/旧边界缓存）未除；仍建议在 `run-agent.sh planner` 调度入口加「当日已存在 `planner/*` 分支即告警退出」护栏并核对双份 cron/launchd。
+  2. 讨论宿主通道：旧仓库 `channing771/mornlea` Discussions REST 仍 410、网页本轮复核仍正常渲染——镜像读取通道维持「浏览器渲染网页」，写入通道仍需 `gh auth login`；若系用户主动禁用旧仓库 Discussions，需裁决镜像归宿（迁 GitHub Issue/其他载体），本表头部链接暂维持原指向。
+  3. PR 待开待合并（compare 入口见上，积压 `planner/*` 分支随本谱系递增）；`planner/2026-11-11` PR 若仍未合并，下轮以 `planner/2026-11-12` 分支内容为上轮边界（其为 11-11 完整后继），不要重复合并。
+  4. `gh` 凭据仍不可用（`gh auth login -h github.com` 待用户执行）：PR、Discussion 正文 `--update` 与积压评论待恢复后补发。
+  5. `B-36` 维持就绪（本谱系自 2026-10-25 起、逐轮复核至本轮）：认领须遵循 P14 玩法批处理（Go/Rust 成对 + parity）；孤儿分支 `codex/b36-axes-shovels`（完整实现、协议 v45 撞号、从未推送）收编或重做沿 B-11 先例由控制会话裁决。
+  6. `rust-authoritative-server` 剩 4.1/4.3/4.9 零推进（`origin/dev` 自 2026-10-23 静默，本轮全引用拉取零变化复核）：4.3 为 F2 归档门（若 F2 先归档须显式移交 P14 `godot-default-client-switch`）；4.9 待用户裁决。
+  7. 本机 `dev` 检出 `a495d1218` 落后 `origin/dev` 且带未提交删除（`.superpowers/sdd/`、`docs/superpowers/` 等），主检出旧快照已多次造成误读，建议用户优先快进并处置工作区；遗留未动项照旧（重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 无本机 worktree、无 backlog 行已合入 change 是否追溯补行待用户裁决）。
