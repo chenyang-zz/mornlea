@@ -786,3 +786,25 @@
   5. `B-36` 维持就绪（本谱系自 2026-10-25 起、逐轮复核至本轮）：认领须遵循 P14 玩法批处理（Go/Rust 成对 + parity）；孤儿分支 `codex/b36-axes-shovels`（完整实现、协议 v45 撞号、从未推送）收编或重做沿 B-11 先例由控制会话裁决。
   6. `rust-authoritative-server` 剩 4.1/4.3/4.9 零推进（`origin/dev` 自 2026-10-23 静默）：4.3 为 F2 归档门（若 F2 先归档须显式移交 P14 `godot-default-client-switch`）；4.9 待用户裁决。
   7. 本机 `dev` 检出 `a495d1218` 落后 `origin/dev` 92 提交且带未提交删除（`.superpowers/sdd/`、`docs/superpowers/` 等），主检出旧快照已多次造成误读，建议用户优先快进并处置工作区；遗留未动项照旧（重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 无本机 worktree、无 backlog 行已合入 change 是否追溯补行待用户裁决）。
+
+## 2026-11-20 09:03 CST（规划者第四十一轮 · 静默复核轮）
+
+- **谱系**：以远端完整 `planner/*` 列表的最新分支 `origin/planner/2026-11-19`（第四十轮，头 `e87f1889c`，未入 `origin/dev`）为上轮边界续接，自其拉 `planner/2026-11-20`；启动时 `git ls-remote --heads` 核证远端无当日先占分支（无分裂、无重复合并）；主检出 `dev`（`a495d1218`，落后 `origin/dev` 且带未提交删除）仅作只读参照，未触碰其工作区与用户未跟踪文件。
+- **读取输入**：`docs/feature-backlog.md` 与 `docs/notes/agent-runs.md`（11-19 版）、`docs/notes/progress.md`、根 `AGENTS.md`（版本矩阵不变：协议 v45、玩家 schema v9、区块 schema v9、metadata v6、`companions.ai` v5、`hostile_mobs` v2、`passive_mobs` v1、engine ABI v11、client ABI v19、benchmark scenario v23）、Discussion #71、`git fetch origin` 后的两基座与全部分支尖端、归档目录、在途分支与 worktree 清单。
+- **讨论读取通道变化**：旧仓库 `channing771/mornlea` 的**未认证 REST 本轮恢复可用**——`/repos/channing771/mornlea/discussions/71` 与 `/comments?per_page=100` 均 HTTP 200（上轮及此前记 410/403 限流），68 条评论全量可取；新仓库 `chenyang-zz/mornlea` 同名端点仍 HTTP 410（Discussions 未随迁移启用）。内容层面**自上轮以来零新评论、正文零更新**：末条评论仍为 2026-09-13T18:53:47Z（B-35 已完成），正文 `updated_at` 仍 2026-09-14T16:04:25Z。
+- **仓库状态**：`origin/dev` 头仍 `525aacdf3`（`--since=2026-10-24` 零提交，静默第 28 天）、`origin/main` 头仍 `cad19e9c9`；远端非 planner 分支 22 条尖端全部停在 2026-10-23 及更早；`git log --all --since=2026-11-19T01:00Z` 全仓仅上轮自身两笔提交；归档目录末项仍 `2026-10-08-rust-runtime-foundation-acceptance`（上轮以来零新归档，横扫范围为空）；`codex/b36-axes-shovels` 本地头仍 `2a745374`（2026-09-15 后零推进、`ls-remote` 确认远端无此分支、无对应 worktree）、`codex/e16-mesh-oracle-retirement-plan` 头仍 `756a7737`（2026-09-23）；`git worktree list` 仅主检出。
+- **校验**：表结构自检 135 行（已完成 56 / 设计候选 42 / 排队 29 / 已取消 6 / 就绪 1 / 已认领 1），无重复 ID、无列数与表头不匹配、组内编号 A-01..08 / B-01..62 / C-01..11 / D-01..22 / E-01..21 / F-01..11 连续；来源在库校验：backlog 内 `archive/…` 相对引用的 75 条全部存在于 `openspec/changes/`；`refresh-discussion.py --dry-run`（在规划 worktree 内以绝对路径运行）逐组计数与上轮一致（就绪 1 = B-36、已认领 1 = F-04）。
+- **变更行**：**无新增行、无状态变更**。备注维护一处：`B-36` 末尾复核句由「2026-11-19」扩为「2026-11-19/11-20」（事实不变：分支头 `2a745374` 零推进、仅存本地、两基座头未变、无对应 worktree，晋升三前提独立复核成立），延续上轮合并逐日重复句的收敛方向。
+- **未落行（判定）**：三通道均为空或仅出一条待澄清——a) 讨论自 2026-09-13 后零新评论（本轮经恢复可用的 REST 全量复核）；b) 上轮以来零新归档；c) MC 覆盖核对新增一条**待澄清**：「船/水上交通」——`openspec/changes/archive/2026-08-19-authoritative-fluid/proposal.md` 的 Why 只把船列为流体的后续消费者，`openspec/changes/archive/2026-09-09-multidimension-world/design.md` 的 Open Questions 只有一句「传送坐骑/船只等实体均不在本期范围内」，两处都没有机制描述（座位/载具物理/放置与拾取规则）与可独立闭环的范围，按规则不落行；讨论写通道不可用（见下），该待澄清项未能发评论，仅记录于此。
+- **提交**：`5ad7a615`（docs: recheck B-36 2026-11-20）与本运行记录提交，均在临时 worktree `/tmp/mornlea-planner-20261120` 制作，未触碰主检出 `dev` 的未提交删除与用户未跟踪文件。
+- **推送**：`planner/2026-11-20` 经 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git` 推送成功（新分支首推，无强推；HTTPS 推送凭据不可用沿既有先例）。
+- **PR**：**实执行失败**——`gh pr create --repo chenyang-zz/mornlea --base dev --head planner/2026-11-20` 返回 `HTTP 401: Requires authentication (https://api.github.com/graphql)`（`gh auth status` 显示 chenyang-zz token 仍 invalid）。评审者可经 `https://github.com/chenyang-zz/mornlea/compare/dev...planner/2026-11-20` 手动开 PR；规划者不直推 `dev`/`main`、不自行合并。
+- **讨论同步**：**实执行失败**——`refresh-discussion.py --update` 返回 `gh: API rate limit exceeded … (HTTP 403)`（gh 未认证 + GraphQL 无配额）；本轮无状态变更，按「无变化轮次不发评论」规则无需状态评论。正文镜像仍停在 2026-09-14 版（缺 `B-36` 就绪与 `B-45..B-62`、`D-20..D-22`、`E-20`/`E-21` 等行，且 `D-16`/`D-17` 仍列排队而仓库为已取消），待凭据恢复后一次 `--update` 补齐。
+- **留给下一轮 / 用户**（沿第四十轮七项，更新三处）：
+  1. 防分裂护栏：连续多轮未再分裂（本轮启动时无 `planner/2026-11-20` 先占分支，11-17/11-18 与更早空档属调度缺失）；根因（main 侧残留会话/旧边界缓存）未除；仍建议在 `run-agent.sh planner` 调度入口加「当日已存在 `planner/*` 分支即告警退出」护栏并核对双份 cron/launchd，护栏应同时报告「当日未运行」。
+  2. 讨论宿主通道：**读取已恢复**（旧仓库未认证 REST HTTP 200，68 条评论全量可取，无需浏览器渲染），**写入仍阻断**（`gh api graphql` 未认证 403、`gh pr create` 401）——镜像正文与积压状态评论待 `gh auth login -h github.com`；新仓库 Discussions 仍 410，宿主是否迁回新仓库待用户裁决。
+  3. PR 积压：`planner/2026-10-25` 起的谱系分支均未并入 `origin/dev`（本轮新增 `planner/2026-11-20`）；`origin/dev` 自 2026-10-23 静默，PR 合并与 dev 前进均需用户侧动作。
+  4. `refresh-discussion.py` 的备注列正则 `PR #\d+[^；|]*` 会把 `B-36` 备注里「与集成分支现行 v45（inventory-drag-drop PR #182）语义撞号…」截成 `PR #182）语义撞号，直接收编需重订编号）` 这类碎片行——镜像刷新恢复后会显示误导备注，属脚本缺陷，修复方式（改正则或备注措辞）待用户/下轮裁决。
+  5. `B-36` 维持就绪（本谱系自 2026-10-25 起逐轮复核至本轮）：认领须遵循 P14 玩法批处理（Go/Rust 成对 + parity）；孤儿分支 `codex/b36-axes-shovels`（完整实现、协议 v45 撞号、从未推送）收编或重做沿 B-11 先例由控制会话裁决。
+  6. `rust-authoritative-server` 剩 4.1/4.3/4.9 零推进（`origin/dev` 静默第 28 天）：4.3 为 F2 归档门（若 F2 先归档须显式移交 P14 `godot-default-client-switch`）；4.9 待用户裁决。
+  7. 本机 `dev` 检出 `a495d1218` 落后 `origin/dev` 且带未提交删除（`.superpowers/sdd/`、`docs/superpowers/` 等），主检出旧快照已多次造成误读，建议用户优先快进并处置工作区；遗留未动项照旧（重复归档目录 `2026-08-29/2026-08-30-tiered-swords-combat`、torch proposal 延期章节占位符、F-04 无本机 worktree、无 backlog 行已合入 change 是否追溯补行待用户裁决）；新增待澄清「船/水上交通」（见「未落行」）。
