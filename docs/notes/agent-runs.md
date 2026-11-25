@@ -902,9 +902,9 @@
 - **变更行**：**无新增行、无状态变更**。备注维护一处：`B-36` 复核句由逐日枚举折叠为「2026-11-19..2026-11-25 连续七轮规划者复核：同上」，事实不变（分支头 `2a745374` 零推进、仅存本地且远端无此分支、两基座头未变、无对应 worktree，晋升三前提独立复核成立），同时抑制备注逐日膨胀。校对一处：发布列车表第 1 行（A-01）「解锁条件」列的陈旧标记「当前在途」改为「—（列车起点）」——A-01 已于 2026-08-27 完成（PR #100），该表十行全部完成、队首现由 `就绪` 的 B-36 承接。晋升检查：串行队首 B-36 已就绪在位；B-37 涉 worldgen 与 engine ABI 且同属核心玩法，按版本互斥不与 B-36 并行晋升。
 - **未落行（判定）**：三通道为空——a) 讨论自 2026-09-13 后零新评论、正文自 2026-09-14 零更新（本轮 REST 全量复核）；b) 上轮以来零新归档；c) MC 覆盖 2026-09-29 已全量复核且其后零玩法合入（`origin/dev` 静默第 33 天、`origin/main` 静默第 48 天）。待澄清累计清单无增删（含「船/水上交通」）。
 - **提交**：`c862d016a`（docs: recheck B-36 2026-11-25）与本运行记录提交，均在临时 worktree `/tmp/mornlea-planner-20261125` 制作，未触碰主检出 `dev` 的未提交删除与用户未跟踪文件。
-- **推送**：`planner/2026-11-25` 经 SSH URL 推送（新分支首推，无强推）；本运行记录提交随后同分支追加推送。
-- **PR**：`gh` 的 github.com token 仍失效；若 `gh pr create` 返回 401，则由评审者经 `https://github.com/chenyang-zz/mornlea/compare/dev...planner/2026-11-25` 手动开 PR；规划者不直推 `dev`/`main`、不自行合并。
-- **讨论同步**：无行状态变化，按「无变化轮次不发评论」规则不发状态评论；正文 `--update` 依赖 `gh api graphql`，token 失效下预期失败，待凭据恢复后一次补齐（镜像仍停在 2026-09-14 版）。
+- **推送**：`planner/2026-11-25` 经 SSH URL `ssh://git@github.com/chenyang-zz/mornlea.git` 推送成功（新分支首推，无强推；推送后远端头 `216db0efc`，`ls-remote` 复核一致）。
+- **PR**：**实执行失败**——`gh pr create --repo chenyang-zz/mornlea --base dev --head planner/2026-11-25` 返回 `HTTP 401: Requires authentication`（`gh auth status`：chenyang-zz token invalid）。评审者可经 `https://github.com/chenyang-zz/mornlea/compare/dev...planner/2026-11-25` 手动开 PR；规划者不直推 `dev`/`main`、不自行合并。
+- **讨论同步**：**实执行失败**——`refresh-discussion.py --update` 返回 `gh: API rate limit exceeded … (HTTP 403)`；本轮无行状态变化，按「无变化轮次不发评论」规则无需状态评论。正文镜像仍停在 2026-09-14 版，待凭据恢复后一次 `--update` 补齐。
 - **留给下一轮 / 用户**（沿第四十五轮七项，更新两处）：
   1. 防分裂护栏：连续多轮未再分裂（本轮启动时双向核证无 `planner/2026-11-25` 先占分支）；根因（main 侧残留会话/旧边界缓存）未除；仍建议在 `run-agent.sh planner` 调度入口加「当日已存在 `planner/*` 分支即告警退出」护栏并核对双份 cron/launchd，护栏应同时报告「当日未运行」。
   2. 讨论宿主通道：**读取可用**（旧仓库未认证 REST 两端点本轮均 HTTP 200，68 条评论全量可取），**写入仍阻断**（`gh api graphql` 未认证 403、`gh pr create` 401）——镜像正文与积压状态评论待 `gh auth login -h github.com`；新仓库 Discussions 仍 410，宿主是否迁回新仓库待用户裁决。
